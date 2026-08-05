@@ -40,7 +40,9 @@ class AppInitializer {
       CustomImageCacheManager.initialize(),
     ]);
 
-    InitialServices.init();
+    // Services are used immediately by MyApp and the player bootstrap. Always
+    // wait for their registration instead of racing runApp().
+    await InitialServices.init();
     _initSmartDialog();
     initRefresh();
 
@@ -54,7 +56,7 @@ class AppInitializer {
     }
 
     if (PlatformUtils.isDesktopNotMac && instanceId.isEmpty) {
-      _setupLaunchAtStartupSafe();
+      await _setupLaunchAtStartupSafe();
     }
 
     _isInitialized = true;

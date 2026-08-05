@@ -12,46 +12,75 @@ import 'package:pure_live/recorder/pages/record_settings/record_settings_control
 
 class InitialServices {
   static void initGlobalServices() {
-    Get.put(SettingsService(), permanent: true);
-    Get.put(RouteObserverController(), permanent: true);
+    if (!Get.isRegistered<SettingsService>()) {
+      Get.put(SettingsService(), permanent: true);
+    }
+    if (!Get.isRegistered<RouteObserverController>()) {
+      Get.put(RouteObserverController(), permanent: true);
+    }
   }
 
   static void initLazyControllers() {
-    // 关注
-    Get.lazyPut(() => FavoriteController(), fenix: true);
-    // iptv频道
-    Get.lazyPut(() => ChannelDetailController(), fenix: true);
-    // 热门
-    Get.lazyPut(() => PopularController(), fenix: true);
-    // 分区
-    Get.lazyPut(() => AreasController(), fenix: true);
-    // 播放器状态
-    Get.lazyPut(() => GlobalPlayerState(), fenix: true);
+    if (!Get.isRegistered<FavoriteController>()) {
+      Get.lazyPut(() => FavoriteController(), fenix: true);
+    }
+    if (!Get.isRegistered<ChannelDetailController>()) {
+      Get.lazyPut(() => ChannelDetailController(), fenix: true);
+    }
+    if (!Get.isRegistered<PopularController>()) {
+      Get.lazyPut(() => PopularController(), fenix: true);
+    }
+    if (!Get.isRegistered<AreasController>()) {
+      Get.lazyPut(() => AreasController(), fenix: true);
+    }
+    if (!Get.isRegistered<GlobalPlayerState>()) {
+      Get.lazyPut(() => GlobalPlayerState(), fenix: true);
+    }
   }
 
   static Future<void> initDb() async {
+    if (Get.isRegistered<DbService>()) return;
     final db = DbService();
     await db.init();
     Get.put<DbService>(db, permanent: true);
+  }
+
+  static void initRecorderServices() {
+    FFmpegKitExtended.initialize();
+
+    if (!Get.isRegistered<CacheService>()) {
+      Get.put(CacheService(), permanent: true);
+    }
+    if (!Get.isRegistered<RecordSettingsController>()) {
+      Get.put(RecordSettingsController(), permanent: true);
+    }
+    if (!Get.isRegistered<StreamResolverService>()) {
+      Get.lazyPut(() => StreamResolverService(), fenix: true);
+    }
+    if (!Get.isRegistered<RecorderController>()) {
+      Get.put(RecorderController(), permanent: true);
+    }
   }
 
   static Future<void> init() async {
     await initDb();
     initGlobalServices();
     initLazyControllers();
-    _initHeavyServicesInBackground();
+    initRecorderServices();
+    _initOptionalServices();
   }
 
-  static void _initHeavyServicesInBackground() {
-    Future.delayed(const Duration(seconds: 3), () {
+  static void _initOptionalServices() {
+    // Auth does not block the local player. Initialize it asynchronously, but
+    // do not hide registration errors behind a fixed three-second delay.
+    Future.microtask(() {
       try {
-        FFmpegKitExtended.initialize();
-        Get.put(CacheService(), permanent: true);
-        Get.put(RecordSettingsController(), permanent: true);
-        Get.put(RecorderController(), permanent: true);
-        Get.lazyPut(() => StreamResolverService(), fenix: true);
-        Get.put(AuthController(), permanent: true);
-      } catch (_) {}
+        if (!Get.isRegistered<AuthController>()) {
+          Get.put(AuthController(), permanent: true);
+        }
+      } catch (e, stackTrace) {
+        debugPrint('AuthController initialization failed: $e\n$stackTrace');
+      }
     });
   }
 }

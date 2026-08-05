@@ -22,7 +22,7 @@ void main(List<String> args) async {
       path: 'assets/translations',
       fallbackLocale: const Locale('zh'),
       assetLoader: const RootBundleAssetLoader(),
-      child: MyApp(),
+      child: const MyApp(),
     ),
   );
 }
@@ -35,17 +35,19 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with DesktopWindowMixin {
+  StreamSubscription<SharedMedia>? _sharedMediaSubscription;
+
   @override
   void initState() {
     super.initState();
     if (PlatformUtils.isDesktop) {
       DesktopManager.initializeListeners(this);
     }
-    initSharedMediaListener();
-    initGlopalPlayer();
+    unawaited(initSharedMediaListener());
+    unawaited(initGlobalPlayer());
   }
 
-  Future<void> initGlopalPlayer() async {
+  Future<void> initGlobalPlayer() async {
     final String savedKey = SettingsService.to.player.videoPlayerKey.v;
     final String validKey = PlayerConsts.engines.containsKey(savedKey) ? savedKey : PlayerConsts.defaultKey;
     final PlayerEngine targetEngine = PlayerConsts.engines[validKey]!;
@@ -56,33 +58,44 @@ class _MyAppState extends State<MyApp> with DesktopWindowMixin {
     } else {
       defaultEngine = targetEngine;
     }
-    GlobalPlayerService.instance.initialize(defaultEngine: defaultEngine);
+    await GlobalPlayerService.instance.initialize(defaultEngine: defaultEngine);
   }
 
   @override
   void dispose() {
+    _sharedMediaSubscription?.cancel();
     if (PlatformUtils.isDesktop) {
       DesktopManager.disposeListeners();
     }
-    GlobalPlayerService.instance.playerManager.dispose();
+    unawaited(GlobalPlayerService.instance.dispose());
     super.dispose();
   }
 
   Future<void> initSharedMediaListener() async {
-    if (Platform.isAndroid) {
-      final handler = ShareHandler.instance;
-      await handler.getInitialSharedMedia();
-      handler.sharedMediaStream.listen((SharedMedia media) async {
-        final path = media.content?.trim().toLowerCase() ?? '';
-        if (path.isEmpty) return;
-        if (path.endsWith('.m3u') || path.endsWith('.txt') || path.contains('.m3u8')) {
-          await IptvImportManager().importFromSharedMedia(media);
-        } else if (path.endsWith('.xml') || path.endsWith('.gz') || path.endsWith('.json')) {
-          await EpgImportManager().importFromSharedMedia(media);
-        } else {
-          ToastUtil.show(i18n("unsupported_file_format"));
-        }
-      });
+    if (!Platform.isAndroid) return;
+
+    final handler = ShareHandler.instance;
+    final initialMedia = await handler.getInitialSharedMedia();
+    if (initialMedia != null) {
+      await _handleSharedMedia(initialMedia);
+    }
+
+    await _sharedMediaSubscription?.cancel();
+    _sharedMediaSubscription = handler.sharedMediaStream.listen((media) {
+      unawaited(_handleSharedMedia(media));
+    });
+  }
+
+  Future<void> _handleSharedMedia(SharedMedia media) async {
+    final path = media.content?.trim().toLowerCase() ?? '';
+    if (path.isEmpty) return;
+
+    if (path.endsWith('.m3u') || path.endsWith('.txt') || path.contains('.m3u8')) {
+      await IptvImportManager().importFromSharedMedia(media);
+    } else if (path.endsWith('.xml') || path.endsWith('.gz') || path.endsWith('.json')) {
+      await EpgImportManager().importFromSharedMedia(media);
+    } else {
+      ToastUtil.show(i18n("unsupported_file_format"));
     }
   }
 
