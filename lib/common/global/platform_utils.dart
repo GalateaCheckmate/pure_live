@@ -1,25 +1,24 @@
-import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 
+/// Windows-only compatibility facade.
+///
+/// Existing call sites can keep using the old API while the remaining
+/// cross-platform branches are removed incrementally.
 class PlatformUtils {
   PlatformUtils._();
-  static bool get isDesktop => Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
-  static bool get isDesktopNotMac => (Platform.isWindows || Platform.isLinux) && !Platform.isMacOS;
-
-  static bool get isMobile => Platform.isAndroid || Platform.isIOS;
+  static bool get isDesktop => true;
+  static bool get isDesktopNotMac => true;
+  static bool get isMobile => false;
+  static bool get isWindows => true;
+  static bool get isMacOS => false;
+  static bool get isLinux => false;
+  static bool get isAndroid => false;
+  static bool get isIOS => false;
 
   static bool isMobileWidth(BuildContext context) {
     return MediaQuery.of(context).size.width < 760;
   }
 
-  static bool get isWindows => Platform.isWindows;
-  static bool get isMacOS => Platform.isMacOS;
-  static bool get isLinux => Platform.isLinux;
-  static bool get isAndroid => Platform.isAndroid;
-  static bool get isIOS => Platform.isIOS;
-
-  static T select<T>({required T desktop, required T mobile}) {
-    return isDesktop ? desktop : mobile;
-  }
+  static T select<T>({required T desktop, required T mobile}) => desktop;
 }
