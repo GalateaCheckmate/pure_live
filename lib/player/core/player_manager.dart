@@ -716,10 +716,10 @@ class PlayerManager {
           stream: onPlaying,
           initialData: isPlayingNow,
           builder: (context, snapshot) {
-            if (_currentPlayer == null) {
+            if (_currentPlayer == null || fitList.isEmpty) {
               return _buildPlaceholder();
             }
-            final safeFitIndex = fitIndex.clamp(0, fitList.length - 1);
+            final safeFitIndex = fitIndex.clamp(0, fitList.length - 1).toInt();
             final boxFit = fitList[safeFitIndex];
             final content = KeyedSubtree(
               key: videoKey.value,
@@ -771,19 +771,23 @@ class PlayerManager {
     );
   }
 
-  Future<void> close() {
-    if (_disposed) return Future.value();
+  Future<void> close() async {
+    if (_disposed) return;
     final existing = _closeOperation;
-    if (existing != null) return existing;
+    if (existing != null) {
+      await existing;
+      return;
+    }
 
     final operation = _performClose();
     _closeOperation = operation;
-    operation.whenComplete(() {
+    try {
+      await operation;
+    } finally {
       if (identical(_closeOperation, operation)) {
         _closeOperation = null;
       }
-    });
-    return operation;
+    }
   }
 
   Future<void> _performClose() async {
