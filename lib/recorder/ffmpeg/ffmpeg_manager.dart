@@ -7,34 +7,32 @@ class FFmpegManager {
   static final FFmpegManager _instance = FFmpegManager._internal();
   static FFmpegManager get to => _instance;
 
-  // 事件流（页面/控制器监听）
   final StreamController<FFmpegEvent> _eventController = StreamController.broadcast();
   Stream<FFmpegEvent> get stream => _eventController.stream;
 
   final FFmpegService _ffmpeg = FFmpegService.to;
 
-  /// 启动录制
-  Future<void> start({required String taskId, required String command}) async {
+  Future<void> start({
+    required String taskId,
+    required String operationId,
+    required String command,
+  }) async {
     await _ffmpeg.start(
       taskId: taskId,
+      operationId: operationId,
       command: command,
-      onEvent: (event) {
-        _eventController.add(event);
-      },
+      onEvent: _eventController.add,
     );
   }
 
-  /// 停止录制
-  Future<void> stop(String taskId) async {
-    await _ffmpeg.stop(taskId);
+  Future<void> stop(String taskId, {String? operationId}) async {
+    await _ffmpeg.stop(taskId, operationId: operationId);
   }
 
-  /// 是否正在运行
-  bool isRunning(String taskId) {
-    return _ffmpeg.isRunning(taskId);
+  bool isRunning(String taskId, {String? operationId}) {
+    return _ffmpeg.isRunning(taskId, operationId: operationId);
   }
 
-  /// 获取会话信息
   FFmpegRecordSession? getSession(String taskId) {
     return _ffmpeg.getSession(taskId);
   }
