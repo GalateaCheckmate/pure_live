@@ -8,10 +8,8 @@ import 'package:pure_live/plugins/cache_manager.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:pure_live/common/utils/hive_pref_util.dart';
-import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/common/global/initial_services.dart';
 import 'package:windows_single_instance/windows_single_instance.dart';
-import 'package:pure_live/common/global/platform/mobile_manager.dart';
 import 'package:pure_live/common/global/platform/desktop_manager.dart';
 
 class AppInitializer {
@@ -29,41 +27,30 @@ class AppInitializer {
     WidgetsFlutterBinding.ensureInitialized();
     await EasyLocalization.ensureInitialized();
 
-    final String instanceId = _getInstanceIdFromArgs(args);
+    final instanceId = _getInstanceIdFromArgs(args);
     await _initWindowsSingleInstance(args, instanceId);
 
     await AppPathManager().initialize(instanceId: instanceId);
-    final Directory hiveDir = await AppPathManager().getDir(AppPathManager.dirHiveDB);
+    final hiveDir = await AppPathManager().getDir(AppPathManager.dirHiveDB);
 
     await Future.wait([
       Hive.initFlutter(hiveDir.path).then((_) => HivePrefUtil.init()),
       CustomImageCacheManager.initialize(),
     ]);
 
-    // Settings and the database are required by DesktopManager and MyApp.
-    // They must be ready before the first frame is rendered.
     await InitialServices.initRequiredServices();
 
     _initSmartDialog();
     initRefresh();
 
-    if (PlatformUtils.isDesktop) {
-      await DesktopManager.initialize();
-      if (Platform.isWindows) {
-        _initWindowsScreenBrightness();
-      }
-    } else if (PlatformUtils.isMobile) {
-      await MobileManager.initialize();
-    }
+    await DesktopManager.initialize();
+    _initWindowsScreenBrightness();
 
-    if (PlatformUtils.isDesktopNotMac && instanceId.isEmpty) {
-      _setupLaunchAtStartupSafe();
+    if (instanceId.isEmpty) {
+      await _setupLaunchAtStartupSafe();
     }
 
     _isInitialized = true;
-
-    // Recording, FFmpeg and account services are not required for the first
-    // frame. Start them only after the required startup chain is complete.
     InitialServices.scheduleDeferredServices();
   }
 
@@ -77,13 +64,15 @@ class AppInitializer {
     return '';
   }
 
-  Future<void> _initWindowsSingleInstance(List<String> args, String instanceId) async {
-    if (!Platform.isWindows) return;
+  Future<void> _initWindowsSingleInstance(
+    List<String> args,
+    String instanceId,
+  ) async {
     try {
       final safeId = instanceId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '');
       await WindowsSingleInstance.ensureSingleInstance(
         args,
-        "PureLive_InstanceID_$safeId",
+        'PureLive_InstanceID_$safeId',
         bringWindowToFront: true,
         exitFunction: () => exit(0),
       );
