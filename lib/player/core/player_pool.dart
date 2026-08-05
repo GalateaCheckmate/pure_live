@@ -2,39 +2,77 @@ import '../models/player_engine.dart';
 import '../interface/unified_player_interface.dart';
 
 class PlayerPool {
-  final Map<PlayerEngine, UnifiedPlayer> _cache = {};
+  final Map<_PlayerPoolKey, UnifiedPlayer> _cache = {};
+  final Map<_PlayerPoolKey, Future<UnifiedPlayer>> _pending = {};
 
   final Future<UnifiedPlayer> Function(PlayerEngine) factory;
 
   PlayerPool({required this.factory});
 
   Future<UnifiedPlayer> getPlayer(PlayerEngine engine, {bool audioOnly = false}) async {
-    if (_cache.containsKey(engine)) {
-      return _cache[engine]!;
+    final key = _PlayerPoolKey(engine, audioOnly);
+    final cached = _cache[key];
+    if (cached != null) return cached;
+
+    final pending = _pending[key];
+    if (pending != null) return pending;
+
+    final creation = _createPlayer(key);
+    _pending[key] = creation;
+    try {
+      return await creation;
+    } finally {
+      _pending.remove(key);
     }
-
-    final player = await factory(engine);
-
-    await player.init(audioOnly: audioOnly);
-
-    _cache[engine] = player;
-
-    return player;
   }
 
-  Future<void> removeFromCache(PlayerEngine engine) async {
-    if (_cache.containsKey(engine)) {
-      final player = _cache[engine]!;
-      await player.hardDispose(); // 销毁原生
-      _cache.remove(engine); // 从缓存删除
+  Future<UnifiedPlayer> _createPlayer(_PlayerPoolKey key) async {
+    final player = await factory(key.engine);
+    try {
+      await player.init(audioOnly: key.audioOnly);
+      _cache[key] = player;
+      return player;
+    } catch (_) {
+      await player.hardDispose();
+      rethrow;
+    }
+  }
+
+  Future<void> removeFromCache(PlayerEngine engine, {bool? audioOnly}) async {
+    final keys = _cache.keys
+        .where((key) => key.engine == engine && (audioOnly == null || key.audioOnly == audioOnly))
+        .toList(growable: false);
+
+    for (final key in keys) {
+      final player = _cache.remove(key);
+      if (player != null) {
+        await player.hardDispose();
+      }
     }
   }
 
   Future<void> disposeAll() async {
-    for (final player in _cache.values) {
+    final players = _cache.values.toSet().toList(growable: false);
+    _cache.clear();
+    _pending.clear();
+
+    for (final player in players) {
       await player.hardDispose();
     }
-
-    _cache.clear();
   }
+}
+
+class _PlayerPoolKey {
+  const _PlayerPoolKey(this.engine, this.audioOnly);
+
+  final PlayerEngine engine;
+  final bool audioOnly;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _PlayerPoolKey && other.engine == engine && other.audioOnly == audioOnly;
+  }
+
+  @override
+  int get hashCode => Object.hash(engine, audioOnly);
 }

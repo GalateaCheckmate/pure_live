@@ -8,6 +8,7 @@ import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
 class FFmpegRecordSession {
   final String taskId;
+  final String operationId;
   int? sessionId;
   bool manualStop = false;
   int recordedSeconds = 0;
@@ -17,7 +18,8 @@ class FFmpegRecordSession {
   double fps = 0;
   DateTime lastUpdate = DateTime.now();
   FFmpegSession? session;
-  FFmpegRecordSession({required this.taskId});
+
+  FFmpegRecordSession({required this.taskId, required this.operationId});
 }
 
 class FFmpegService {
@@ -33,117 +35,145 @@ class FFmpegService {
 
   Future<void> start({
     required String taskId,
+    required String operationId,
     required String command,
     required void Function(FFmpegEvent event) onEvent,
   }) async {
-    onEvent(FFmpegEvent(taskId: taskId, type: FFmpegEventType.started));
+    if (_sessions.containsKey(taskId)) {
+      throw StateError('FFmpeg session already active for task $taskId');
+    }
 
-    final ffempgSession = FFmpegKit.createSession(command);
-
-    final session = FFmpegRecordSession(taskId: taskId);
+    final ffmpegSession = FFmpegKit.createSession(command);
+    final session = FFmpegRecordSession(taskId: taskId, operationId: operationId)
+      ..session = ffmpegSession
+      ..sessionId = ffmpegSession.getSessionId();
     _sessions[taskId] = session;
-    session.session = ffempgSession;
-    session.sessionId = ffempgSession.getSessionId();
-    ffempgSession.setStatisticsCallback((s) {
+
+    onEvent(
+      FFmpegEvent(
+        taskId: taskId,
+        operationId: operationId,
+        type: FFmpegEventType.started,
+      ),
+    );
+
+    ffmpegSession.setStatisticsCallback((statistics) {
       session
-        ..recordedSeconds = s.time ~/ 1000
-        ..fileSize = s.size
-        ..bitrate = s.bitrate
-        ..speed = s.speed
-        ..fps = s.videoFps
+        ..recordedSeconds = statistics.time ~/ 1000
+        ..fileSize = statistics.size
+        ..bitrate = statistics.bitrate
+        ..speed = statistics.speed
+        ..fps = statistics.videoFps
         ..lastUpdate = DateTime.now();
 
       onEvent(
         FFmpegEvent(
           taskId: taskId,
+          operationId: operationId,
           type: FFmpegEventType.progress,
-          data: {"time": s.time, "size": s.size, "bitrate": s.bitrate, "speed": s.speed, "fps": s.videoFps},
+          data: {
+            'time': statistics.time,
+            'size': statistics.size,
+            'bitrate': statistics.bitrate,
+            'speed': statistics.speed,
+            'fps': statistics.videoFps,
+          },
         ),
       );
     });
-    ffempgSession.setCompleteCallback((completedSession) async {
-      final code = completedSession.getReturnCode();
-      bool isNormalExit = [
-        0, // 正常结束（直播间下播）
-        255, // 用户手动点击停止
-        -1094995529, // 断流/无数据
-        -1077350400, // 超时/网络断开
-        -1005272104, // 读取中断
-      ].contains(code);
 
-      log('FFmpeg complete => taskId: $taskId; code: $code');
+    ffmpegSession.setCompleteCallback((completedSession) async {
+      final code = completedSession.getReturnCode();
+      final isNormalExit = session.manualStop ||
+          [
+            0,
+            255,
+            -1094995529,
+            -1077350400,
+            -1005272104,
+          ].contains(code);
+
+      log(
+        'FFmpeg complete => taskId: $taskId; operationId: $operationId; code: $code; manual: ${session.manualStop}',
+      );
 
       String userFriendlyMessage = '录制遇到未知错误 (代码: $code)';
-      Map<String, dynamic> errorData = {"code": code};
+      final Map<String, dynamic> eventData = {
+        'code': code,
+        'manualStop': session.manualStop,
+      };
+
       if (!isNormalExit) {
         try {
           final String logs = completedSession.getLogs() ?? '';
           log('FFmpeg 原始错误日志:\n$logs');
           final lowerLogs = logs.toLowerCase();
-          errorData["raw_logs"] = lowerLogs;
-          // 1. 路径与权限错误
+          eventData['raw_logs'] = lowerLogs;
+
           if (code == -2 || lowerLogs.contains('no such file') || lowerLogs.contains('permission denied')) {
             userFriendlyMessage = i18n('path_or_permission_error');
-          }
-          // 2. 拦截 404 错误（原逻辑在此处有重复条件，现已优化合并）
-          else if (lowerLogs.contains('server returned 404') || lowerLogs.contains('http error 404')) {
+          } else if (lowerLogs.contains('server returned 404') || lowerLogs.contains('http error 404')) {
             userFriendlyMessage = i18n('url_expired_404');
-          }
-          // 3. 拦截 403 错误
-          else if (lowerLogs.contains('server returned 403') || lowerLogs.contains('http error 403')) {
+          } else if (lowerLogs.contains('server returned 403') || lowerLogs.contains('http error 403')) {
             userFriendlyMessage = i18n('url_forbidden_403');
-          }
-          // 4. 拦截连接超时
-          else if (lowerLogs.contains('connection timed out') || lowerLogs.contains('timed out')) {
+          } else if (lowerLogs.contains('connection timed out') || lowerLogs.contains('timed out')) {
             userFriendlyMessage = i18n('timeout');
-          }
-          // 5. 拦截参数错误
-          else if (lowerLogs.contains('invalid argument')) {
+          } else if (lowerLogs.contains('invalid argument')) {
             userFriendlyMessage = i18n('param_error');
-          }
-          // 6. 拦截流地址格式无法打开
-          else if (lowerLogs.contains('unable to open')) {
+          } else if (lowerLogs.contains('unable to open')) {
             userFriendlyMessage = i18n('invalid_stream_format');
-          }
-          // 7. 兜底未知错误：提取最后一行并使用具名参数传给国际化
-          else if (logs.trim().isNotEmpty) {
+          } else if (logs.trim().isNotEmpty) {
             final lastLogLine = logs.trim().split('\n').last;
             userFriendlyMessage = i18n('unknown_error', args: {'error_log': lastLogLine});
           }
         } catch (e) {
           log('解析 FFmpeg 日志时发生异常: $e');
         }
-
-        // 传递给 UI 层调用
-        errorData["message"] = userFriendlyMessage;
+        eventData['message'] = userFriendlyMessage;
       }
 
       onEvent(
         FFmpegEvent(
           taskId: taskId,
+          operationId: operationId,
           type: isNormalExit ? FFmpegEventType.complete : FFmpegEventType.error,
-          data: errorData,
+          data: eventData,
         ),
       );
 
-      _sessions.remove(taskId);
+      if (identical(_sessions[taskId], session)) {
+        _sessions.remove(taskId);
+      }
     });
 
-    await ffempgSession.executeAsync();
+    try {
+      await ffmpegSession.executeAsync();
+    } catch (_) {
+      if (identical(_sessions[taskId], session)) {
+        _sessions.remove(taskId);
+      }
+      rethrow;
+    }
   }
 
-  Future<void> stop(String taskId) async {
+  Future<void> stop(String taskId, {String? operationId}) async {
     final session = _sessions[taskId];
     if (session == null) return;
+    if (operationId != null && session.operationId != operationId) return;
+
     session.manualStop = true;
-    final ffempgSession = session.session;
-    if (ffempgSession == null) {
-      return;
-    }
-    log('FFmpeg stop => $taskId');
-    FFmpegKit.cancel(ffempgSession);
+    final ffmpegSession = session.session;
+    if (ffmpegSession == null) return;
+
+    log('FFmpeg stop => $taskId (${session.operationId})');
+    FFmpegKit.cancel(ffmpegSession);
   }
 
   FFmpegRecordSession? getSession(String taskId) => _sessions[taskId];
-  bool isRunning(String taskId) => _sessions.containsKey(taskId);
+
+  bool isRunning(String taskId, {String? operationId}) {
+    final session = _sessions[taskId];
+    if (session == null) return false;
+    return operationId == null || session.operationId == operationId;
+  }
 }

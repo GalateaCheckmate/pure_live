@@ -1,0 +1,63 @@
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+String readRepositoryFile(String path) {
+  final file = File(path);
+  expect(file.existsSync(), isTrue, reason: 'Missing repository file: $path');
+  return file.readAsStringSync();
+}
+
+void main() {
+  group('Windows-only baseline contracts', () {
+    test('required services are awaited before desktop initialization', () {
+      final source = readRepositoryFile('lib/common/global/initialized.dart');
+      final requiredIndex = source.indexOf('await InitialServices.initRequiredServices();');
+      final desktopIndex = source.indexOf('await DesktopManager.initialize();');
+
+      expect(requiredIndex, greaterThanOrEqualTo(0));
+      expect(desktopIndex, greaterThan(requiredIndex));
+      expect(source, contains('InitialServices.scheduleDeferredServices();'));
+    });
+
+    test('common barrel does not export itself', () {
+      final source = readRepositoryFile('lib/common/index.dart');
+
+      expect(source, isNot(contains("export 'package:pure_live/common/index.dart';")));
+    });
+
+    test('release workflow contains only the Windows build job', () {
+      final source = readRepositoryFile('.github/workflows/release.yml');
+
+      expect(source, contains('build-windows:'));
+      expect(source, isNot(contains('build-android:')));
+      expect(source, isNot(contains('build-macos:')));
+    });
+
+    test('Windows CI analyzes, tests, builds and records a baseline', () {
+      final source = readRepositoryFile('.github/workflows/windows-ci.yml');
+
+      expect(source, contains('flutter analyze'));
+      expect(source, contains('flutter test'));
+      expect(source, contains('flutter build windows --release'));
+      expect(source, contains('windows_baseline.ps1'));
+    });
+
+    test('Flutter version is synchronized across Windows workflows', () {
+      final fvm = readRepositoryFile('.fvmrc');
+      final ci = readRepositoryFile('.github/workflows/windows-ci.yml');
+      final release = readRepositoryFile('.github/workflows/release.yml');
+
+      expect(fvm, contains('3.44.8'));
+      expect(ci, contains('flutter-version: "3.44.8"'));
+      expect(release, contains('flutter-version: "3.44.8"'));
+    });
+
+    test('Windows FFmpeg bundle references a published asset', () {
+      final pubspec = readRepositoryFile('pubspec.yaml');
+
+      expect(pubspec, contains('v0.10.5-windows/bundle-base-windows-x86_64-shared-lgpl.zip'));
+      expect(pubspec, isNot(contains('v0.10.2-windows')));
+    });
+  });
+}

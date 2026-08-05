@@ -63,6 +63,12 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   final isCurrentRoomAudioOnly = false.obs;
 
   String? _currentDanmakuRoomId;
+  Worker? _timerWorker;
+  StreamSubscription<dynamic>? _stopWatchSubscription;
+  int _loadGeneration = 0;
+  bool _danmakuInitialized = false;
+  bool _closed = false;
+
   LivePlayQuality get _qualitySafe {
     if (qualites.isEmpty) {
       return LivePlayQuality(quality: '原画');
@@ -79,6 +85,8 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     return playUrls[i];
   }
 
+  bool _isLoadActive(int generation) => !_closed && generation == _loadGeneration;
+
   @override
   void onInit() {
     super.onInit();
@@ -92,7 +100,9 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     _initDebounce();
     _initTimer();
     await _preloadEmoji();
-    _initPlayer();
+    if (!_closed) {
+      _initPlayer();
+    }
   }
 
   void _initState() {
@@ -101,6 +111,7 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     isCurrentRoomAudioOnly.value = SettingsService.to.player.audioOnly.v;
     if (SettingsService.to.danmaku.enableDanmakuDisplay.v) {
       liveDanmaku = currentSite.liveSite.getDanmaku();
+      _danmakuInitialized = true;
     }
   }
 
@@ -116,10 +127,12 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
   void _initPlayer() {
     if (!_hasRoom) return;
-    onInitPlayerState(
-      reloadDataType: detail.value!.platform == Sites.bilibiliSite
-          ? ReloadDataType.changeLine
-          : ReloadDataType.refreash,
+    unawaited(
+      onInitPlayerState(
+        reloadDataType: detail.value!.platform == Sites.bilibiliSite
+            ? ReloadDataType.changeLine
+            : ReloadDataType.refreash,
+      ),
     );
   }
 
@@ -129,11 +142,13 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   }
 
   void _initDebounce() {
-    everAll([closeTimeFlag, closeTimes], (_) => _toggleTimer());
+    _timerWorker?.dispose();
+    _timerWorker = everAll([closeTimeFlag, closeTimes], (_) => _toggleTimer());
   }
 
   void _initTimer() {
-    _stopWatchTimer.fetchEnded.listen((_) {
+    _stopWatchSubscription?.cancel();
+    _stopWatchSubscription = _stopWatchTimer.fetchEnded.listen((_) {
       _stopWatchTimer.onStopTimer();
       exit(0);
     });
@@ -150,19 +165,10 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   }
 
   bool _needReconnectDanmaku(LiveRoom room) {
-    log(_currentDanmakuRoomId.toString());
-
-    log((_currentDanmakuRoomId != room.roomId).toString());
-    log(room.roomId.toString());
     if (_currentDanmakuRoomId.toString() != room.roomId.toString()) {
       return true;
     }
-
-    if (!liveDanmaku.isConnected) {
-      return true;
-    }
-
-    return false;
+    return !liveDanmaku.isConnected;
   }
 
   bool myInterceptor(bool stopDefaultButtonEvent, RouteInfo info) {
@@ -184,19 +190,28 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
   @override
   void onClose() {
-    _disposeAll();
+    _closed = true;
+    _loadGeneration++;
+    unawaited(_disposeAll());
     super.onClose();
   }
 
-  void _disposeAll() {
-    tabController.dispose();
+  Future<void> _disposeAll() async {
+    _timerWorker?.dispose();
+    _timerWorker = null;
+    await _stopWatchSubscription?.cancel();
+    _stopWatchSubscription = null;
     _stopWatchTimer.onStopTimer();
+    tabController.dispose();
     if (Platform.isAndroid) {
       BackButtonInterceptor.removeByName("live_play_page");
     }
-    if (SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+    if (_danmakuInitialized) {
       liveDanmaku.stop();
+      _danmakuInitialized = false;
     }
+    await videoController.value?.destory();
+    videoController.value = null;
   }
 
   void setNormalScreen() => screenMode.value = VideoMode.normal;
@@ -211,16 +226,21 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     int line = 0,
     bool isReCalculate = true,
   }) async {
-    final roomId = detail.value?.roomId;
-    if (roomId == null) return LiveRoom();
-    var liveRoom = await currentSite.liveSite.getRoomDetail(roomId: roomId, platform: detail.value!.platform!);
-    // ================= IPTV =================
-    bool isIptv = currentSite.id == Sites.iptvSite;
+    final generation = ++_loadGeneration;
+    final currentDetail = detail.value;
+    final roomId = currentDetail?.roomId;
+    final platform = currentDetail?.platform;
+    if (roomId == null || platform == null) return LiveRoom();
+
+    final liveRoom = await currentSite.liveSite.getRoomDetail(roomId: roomId, platform: platform);
+    if (!_isLoadActive(generation)) return liveRoom;
+
+    final isIptv = currentSite.id == Sites.iptvSite;
     if (isIptv) {
       detail.value = null;
       detail.value = liveRoom;
-      _initIptvPlayer();
-      return detail.value!;
+      await _initIptvPlayer(generation);
+      return detail.value ?? liveRoom;
     }
 
     handleCurrentLineAndQuality(reloadDataType: reloadDataType, line: line, isReCalculate: isReCalculate);
@@ -239,27 +259,28 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
       return liveRoom;
     }
 
-    final liveStatus = liveRoom.status! || liveRoom.isRecord!;
+    final liveStatus = liveRoom.status == true || liveRoom.isRecord == true;
 
     if (liveStatus) {
       isLiving.value = true;
 
-      await getPlayQualites();
+      await getPlayQualites(generation: generation);
+      if (!_isLoadActive(generation)) return liveRoom;
+
       if (liveRoom.platform != Sites.iptvSite) {
         SettingsService.to.history.addRoomToHistory(liveRoom);
       }
 
       const except = [Sites.kuaishouSite, Sites.iptvSite, Sites.ccSite];
 
-      if (!except.contains(liveRoom.platform) && SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+      if (!except.contains(liveRoom.platform) &&
+          SettingsService.to.danmaku.enableDanmakuDisplay.v &&
+          _danmakuInitialized) {
         final needReconnect = _needReconnectDanmaku(liveRoom);
         if (needReconnect) {
           liveDanmaku.stop();
-
           initDanmau();
-
           liveDanmaku.start(liveRoom.danmakuData);
-
           _currentDanmakuRoomId = liveRoom.roomId;
         }
       }
@@ -281,20 +302,21 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     return liveRoom;
   }
 
-  void switchRoom(LiveRoom newRoom) async {
-    bool sameRoom = detail.value?.roomId == newRoom.roomId && detail.value?.platform == newRoom.platform;
+  Future<void> switchRoom(LiveRoom newRoom) async {
+    _loadGeneration++;
+    final sameRoom = detail.value?.roomId == newRoom.roomId && detail.value?.platform == newRoom.platform;
 
     if (!sameRoom) {
       messages.clear();
 
-      if (SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+      if (_danmakuInitialized) {
         liveDanmaku.stop();
       }
       _currentDanmakuRoomId = null;
     }
 
     final manager = GlobalPlayerService.instance.playerManager;
-    manager.close();
+    await manager.close();
 
     success.value = false;
     isLiving.value = true;
@@ -303,7 +325,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     videoController.value = null;
 
     hasUseDefaultResolution = false;
-
     isCurrentRoomAudioOnly.value = SettingsService.to.player.audioOnly.v;
 
     detail.value = newRoom;
@@ -311,19 +332,21 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
     if (!sameRoom && SettingsService.to.danmaku.enableDanmakuDisplay.v) {
       liveDanmaku = currentSite.liveSite.getDanmaku();
+      _danmakuInitialized = true;
     }
 
     await EmojiManager.instance.preload(newRoom.platform!);
+    if (_closed) return;
 
-    onInitPlayerState(
+    await onInitPlayerState(
       reloadDataType: newRoom.platform == Sites.bilibiliSite ? ReloadDataType.changeLine : ReloadDataType.refreash,
     );
   }
 
   // ================= IPTV =================
-  void _initIptvPlayer() {
+  Future<void> _initIptvPlayer(int generation) async {
     final link = detail.value?.link;
-    log(' IPTV link: ${detail.value?.link}');
+    log('IPTV link: $link');
     if (link == null || link.isEmpty) {
       ToastUtil.show(i18n('invalid_play_url'));
       return;
@@ -334,8 +357,8 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     currentLineIndex.value = 0;
     playUrls.value = [link];
 
-    setPlayer();
-    if (SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+    await setPlayer(generation: generation);
+    if (_danmakuInitialized) {
       liveDanmaku.stop();
     }
   }
@@ -361,7 +384,7 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   // 弹幕
   // =========================================================
   void initDanmau() {
-    if (!_hasRoom) return;
+    if (!_hasRoom || !_danmakuInitialized) return;
     if (!SettingsService.to.danmaku.enableDanmakuDisplay.v) {
       return;
     }
@@ -374,22 +397,21 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     final rxVideoCtrl = videoController;
 
     liveDanmaku.onMessage = (msg) {
+      if (_closed) return;
       if (msg.type == LiveMessageType.chat) {
         if (SettingsService.to.fav.shieldList.v.every((e) => !msg.message.contains(e))) {
           _addMessage(msg);
-          if (rxVideoCtrl.value != null) {
-            rxVideoCtrl.value!.sendDanmaku(msg);
-          }
+          rxVideoCtrl.value?.sendDanmaku(msg);
         }
       }
     };
 
     liveDanmaku.onClose = (msg) {
-      messages.add(_systemMsg(msg));
+      if (!_closed) messages.add(_systemMsg(msg));
     };
 
     liveDanmaku.onReady = () {
-      messages.add(_systemMsg(i18n('danmaku_connected')));
+      if (!_closed) messages.add(_systemMsg(i18n('danmaku_connected')));
     };
   }
 
@@ -408,7 +430,15 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   // =========================================================
   // 设置播放器
   // =========================================================
-  void setPlayer() async {
+  Future<void> setPlayer({int? generation}) async {
+    if (generation != null && !_isLoadActive(generation)) return;
+    final currentRoom = detail.value;
+    final datasource = _playUrlSafe;
+    if (currentRoom == null || currentRoom.roomId == null || datasource.isEmpty) {
+      success.value = false;
+      return;
+    }
+
     Map<String, String> headers = {};
 
     if (currentSite.id == Sites.bilibiliSite) {
@@ -435,19 +465,21 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
       };
     } else if (currentSite.id == Sites.huyaSite) {
       final ua = await HuyaSite().getHuYaUA();
+      if (generation != null && !_isLoadActive(generation)) return;
       headers = {"user-agent": ua, "origin": "https://www.huya.com"};
-    } else if (currentSite.id == Sites.iptvSite) {
-      if (SettingsService.to.iptv.customIptvUserAgent.v.isNotEmpty) {
-        headers = {"user-agent": SettingsService.to.iptv.customIptvUserAgent.v};
-      }
+    } else if (currentSite.id == Sites.iptvSite && SettingsService.to.iptv.customIptvUserAgent.v.isNotEmpty) {
+      headers = {"user-agent": SettingsService.to.iptv.customIptvUserAgent.v};
     }
 
-    GlobalPlayerState().setCurrentRoom(room.roomId!);
+    await videoController.value?.destory();
+    if (generation != null && !_isLoadActive(generation)) return;
+
+    GlobalPlayerState.to.setCurrentRoom(currentRoom.roomId!);
 
     videoController.value = VideoController(
-      room: detail.value!,
-      playUrs: playUrls.value,
-      datasource: _playUrlSafe,
+      room: currentRoom,
+      playUrs: List<String>.from(playUrls),
+      datasource: datasource,
       allowScreenKeepOn: SettingsService.to.app.enableScreenKeepOn.v,
       headers: headers,
       qualiteName: _qualitySafe.quality,
@@ -463,22 +495,27 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   // =========================================================
   // 切换清晰度
   // =========================================================
-  void setResolution(ReloadDataType reloadDataType, int qualityIndex, int lineIndex) {
-    GlobalPlayerService.instance.playerManager.close();
-    videoController.value?.destory();
+  Future<void> setResolution(ReloadDataType reloadDataType, int qualityIndex, int lineIndex) async {
+    _loadGeneration++;
+    await GlobalPlayerService.instance.playerManager.close();
+    await videoController.value?.destory();
+    videoController.value = null;
 
     currentQuality.value = qualityIndex;
     currentLineIndex.value = lineIndex;
 
-    onInitPlayerState(reloadDataType: reloadDataType, line: currentLineIndex.value, isReCalculate: false);
+    await onInitPlayerState(reloadDataType: reloadDataType, line: currentLineIndex.value, isReCalculate: false);
   }
 
   // =========================================================
   // 清晰度
   // =========================================================
-  Future<void> getPlayQualites() async {
+  Future<void> getPlayQualites({int? generation}) async {
     try {
-      var playQualites = await currentSite.liveSite.getPlayQualites(detail: detail.value!);
+      final currentRoom = detail.value;
+      if (currentRoom == null) return;
+      final playQualites = await currentSite.liveSite.getPlayQualites(detail: currentRoom);
+      if (generation != null && !_isLoadActive(generation)) return;
 
       if (playQualites.isEmpty) {
         ToastUtil.show(i18n('cannot_read_video_info'));
@@ -490,7 +527,8 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
       if (!hasUseDefaultResolution) {
         String userPrefer;
-        final List<ConnectivityResult> connectivityResult = await (Connectivity().checkConnectivity());
+        final List<ConnectivityResult> connectivityResult = await Connectivity().checkConnectivity();
+        if (generation != null && !_isLoadActive(generation)) return;
 
         if (connectivityResult.contains(ConnectivityResult.mobile)) {
           userPrefer = SettingsService.to.player.preferResolutionCellular.v;
@@ -498,41 +536,45 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
           userPrefer = SettingsService.to.player.preferResolution.v;
         }
 
-        List<String> availableQualities = playQualites.map((e) => e.quality).toList();
-        int matchedIndex = availableQualities.indexOf(userPrefer);
+        final availableQualities = playQualites.map((e) => e.quality).toList();
+        final matchedIndex = availableQualities.indexOf(userPrefer);
 
-        // 尝试直接匹配用户偏好的分辨率
         if (matchedIndex != -1) {
           currentQuality.value = matchedIndex;
           hasUseDefaultResolution = true;
-          getPlayUrl();
+          await getPlayUrl(generation: generation);
           return;
         }
-        List<String> systemResolutions = PlayerConsts.resolutions;
-        int preferLevel = systemResolutions.indexOf(userPrefer);
+        final systemResolutions = PlayerConsts.resolutions;
+        var preferLevel = systemResolutions.indexOf(userPrefer);
 
         if (preferLevel == -1) preferLevel = 0;
 
-        double preferRatio = preferLevel / (systemResolutions.length - 1);
-        int targetIndex = (preferRatio * (availableQualities.length - 1)).round();
+        final preferRatio = preferLevel / (systemResolutions.length - 1);
+        var targetIndex = (preferRatio * (availableQualities.length - 1)).round();
 
         targetIndex = targetIndex.clamp(0, availableQualities.length - 1);
         currentQuality.value = targetIndex;
         hasUseDefaultResolution = true;
       }
 
-      await getPlayUrl();
-    } catch (_) {
+      await getPlayUrl(generation: generation);
+    } catch (e, stackTrace) {
+      log('Read video quality failed: $e', stackTrace: stackTrace);
       ToastUtil.show(i18n('read_video_failed'));
       success.value = false;
     }
   }
 
-  Future<void> getPlayUrl() async {
-    var playUrl = await currentSite.liveSite.getPlayUrls(
-      detail: detail.value!,
+  Future<void> getPlayUrl({int? generation}) async {
+    final currentRoom = detail.value;
+    if (currentRoom == null || qualites.isEmpty) return;
+
+    final playUrl = await currentSite.liveSite.getPlayUrls(
+      detail: currentRoom,
       quality: qualites[currentQuality.value],
     );
+    if (generation != null && !_isLoadActive(generation)) return;
 
     if (playUrl.isEmpty) {
       ToastUtil.show(i18n('cannot_read_play_url'));
@@ -541,7 +583,7 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     }
 
     playUrls.value = playUrl;
-    setPlayer();
+    await setPlayer(generation: generation);
   }
 
   Future<void> changeCurrentRoomAudioOnly(bool value) async {
@@ -589,16 +631,22 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
       } else {
         await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
       }
-    } catch (e) {
+    } catch (_) {
       ToastUtil.show(i18n('open_app_failed_fallback_browser'));
       await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
     }
   }
 
   Future<void> startCatchUp({required String catchUpUrl, int? startTime, int? endTime}) async {
-    var room = detail.value!;
+    final currentRoom = detail.value;
+    if (currentRoom == null) return;
     detail.value = null;
-    detail.value = room.copyWith(catchUpUrl: catchUpUrl, isCatchUp: true, catchUpStart: startTime, catchUpEnd: endTime);
+    detail.value = currentRoom.copyWith(
+      catchUpUrl: catchUpUrl,
+      isCatchUp: true,
+      catchUpStart: startTime,
+      catchUpEnd: endTime,
+    );
     await _switchToUrl(catchUpUrl);
   }
 
@@ -606,6 +654,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     success.value = false;
     playUrls.value = [url];
     currentLineIndex.value = 0;
-    setPlayer();
+    await setPlayer();
   }
 }
