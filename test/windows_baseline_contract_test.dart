@@ -52,5 +52,12 @@ void main() {
       expect(ci, contains('flutter-version: "3.44.8"'));
       expect(release, contains('flutter-version: "3.44.8"'));
     });
+
+    test('Windows FFmpeg bundle references a published asset', () {
+      final pubspec = readRepositoryFile('pubspec.yaml');
+
+      expect(pubspec, contains('v0.10.5-windows/bundle-base-windows-x86_64-shared-lgpl.zip'));
+      expect(pubspec, isNot(contains('v0.10.2-windows')));
+    });
   });
 }
