@@ -35,6 +35,8 @@ class PlayerManager {
 
   int _sessionId = 0;
   bool _isClosing = false;
+  bool _currentAudioOnly = false;
+  Future<void>? _closeOperation;
 
   PlayerManager({
     required this.playerPool,
@@ -42,7 +44,7 @@ class PlayerManager {
     required this.preloadManager,
     required this.lineManager,
   }) {
-    isInPip.listen((value) {
+    _pipStateSubscription = isInPip.listen((value) {
       GlobalPlayerState.to.isPipMode.value = value;
     });
   }
@@ -76,6 +78,7 @@ class PlayerManager {
 
   final List<StreamSubscription> _subscriptions = [];
   StreamSubscription<PiPStatus>? _pipSubscription;
+  StreamSubscription<bool>? _pipStateSubscription;
 
   bool _disposed = false;
   bool _isSwitchingDueToFallback = false;
@@ -109,12 +112,13 @@ class PlayerManager {
     try {
       _defaultEngine = engine;
       _runtimeEngine = engine;
+      _currentAudioOnly = audioOnly;
       _currentPlayer = await playerPool.getPlayer(engine, audioOnly: audioOnly);
       await _bindPlayerStreams(_currentPlayer!);
       LiveAudioService.setPlayer(_currentPlayer!);
       if (Platform.isAndroid) {
         floating = Floating();
-        _pipSubscription?.cancel();
+        await _pipSubscription?.cancel();
         _pipSubscription = floating.pipStatusStream.listen((status) {
           isInPip.value = status == PiPStatus.enabled;
         });
@@ -142,18 +146,36 @@ class PlayerManager {
     LiveRoom? room,
     bool audioOnly = false,
   }) async {
-    if (_disposed || _isClosing) return;
+    final closing = _closeOperation;
+    if (closing != null) {
+      await closing;
+    }
+    if (_disposed) return;
+
     final mySessionId = ++_sessionId;
 
     if (room?.roomId != currentFloatRoom?.roomId) {
       lineManager.reset();
     }
-    if (_currentPlayer == null || _runtimeEngine == null) {
+
+    final needsInitialization =
+        _currentPlayer == null || _runtimeEngine == null || _currentAudioOnly != audioOnly;
+    if (needsInitialization) {
+      if (_currentPlayer != null && _runtimeEngine != null) {
+        await _clearSubscriptions();
+        await playerPool.removeFromCache(_runtimeEngine!, audioOnly: _currentAudioOnly);
+        _currentPlayer = null;
+        _runtimeEngine = null;
+      }
+
       final String savedKey = SettingsService.to.player.videoPlayerKey.v;
       final String validKey = PlayerConsts.engines.containsKey(savedKey) ? savedKey : PlayerConsts.defaultKey;
       _defaultEngine = PlayerConsts.engines[validKey]!;
       _runtimeEngine = _defaultEngine;
-      log('No current player, initializing with default engine: _defaultEngine', name: 'PlayerManager');
+      log(
+        'No compatible current player, initializing with default engine: ${_defaultEngine?.name}',
+        name: 'PlayerManager',
+      );
       await initialize(engine: _defaultEngine!, audioOnly: audioOnly);
     } else if (_runtimeEngine != _defaultEngine && !_isSwitchingDueToFallback) {
       await switchEngine(_defaultEngine!, isManual: false);
@@ -194,7 +216,7 @@ class PlayerManager {
         }
         targetUrl = pipePath;
         targetPlayUrls = [pipePath];
-      } catch (e) {
+      } catch (_) {
         audioLoader.stop();
         if (!_isSessionValid(mySessionId)) return;
         throw PlayerException(message: 'Audio pipe init timeout', type: PlayerErrorType.unknown);
@@ -215,8 +237,11 @@ class PlayerManager {
       if (!_isSessionValid(mySessionId)) return;
 
       LiveAudioService.setPlayer(player);
-      LiveAudioService.start(room!.roomId!, room.nick ?? "", room.title ?? "", room.avatar);
-      videoKey.value = ValueKey("video_{DateTime.now().millisecondsSinceEpoch}");
+      final roomId = room?.roomId;
+      if (roomId != null) {
+        await LiveAudioService.start(roomId, room?.nick ?? "", room?.title ?? "", room?.avatar);
+      }
+      videoKey.value = ValueKey("video_${DateTime.now().microsecondsSinceEpoch}");
       _stateSubject.add(PlayerState.ready);
     } on PlayerException catch (e) {
       if (!_isHandlingError && _isSessionValid(mySessionId)) {
@@ -240,27 +265,33 @@ class PlayerManager {
 
   Future<void> replay() async {
     if (_currentUrl == null) return;
-    await play(_currentUrl!, _currentPlayUrls, _currentHeaders, room: currentFloatRoom);
+    await play(
+      _currentUrl!,
+      _currentPlayUrls,
+      _currentHeaders,
+      room: currentFloatRoom,
+      audioOnly: _currentAudioOnly,
+    );
   }
 
   Future<void> switchEngine(PlayerEngine engine, {bool isManual = false}) async {
     if (_disposed || _isClosing) return;
     if (_runtimeEngine == engine && _currentPlayer != null) return;
     try {
-      final oldPlayer = _currentPlayer;
       final oldEngine = _runtimeEngine;
+      final oldAudioOnly = _currentAudioOnly;
       await _clearSubscriptions();
-      final newPlayer = await playerPool.getPlayer(engine);
+      final newPlayer = await playerPool.getPlayer(engine, audioOnly: _currentAudioOnly);
       _currentPlayer = newPlayer;
       _runtimeEngine = engine;
       if (isManual) _defaultEngine = engine;
-      log('Switch engine to engine', name: 'PlayerManager');
+      log('Switch engine to ${engine.name}', name: 'PlayerManager');
       await _bindPlayerStreams(newPlayer);
       LiveAudioService.setPlayer(_currentPlayer!);
-      if (oldPlayer != null && oldEngine != null) {
-        await _safeDestroyPlayer(oldPlayer, oldEngine);
+      if (oldEngine != null) {
+        await _safeDestroyPlayer(oldEngine, audioOnly: oldAudioOnly);
       }
-      videoKey.value = ValueKey("video_{DateTime.now().millisecondsSinceEpoch}");
+      videoKey.value = ValueKey("video_${DateTime.now().microsecondsSinceEpoch}");
     } catch (e, s) {
       final exception = PlayerException(
         message: 'Switch engine failed',
@@ -273,18 +304,17 @@ class PlayerManager {
     }
   }
 
-  Future<void> _safeDestroyPlayer(UnifiedPlayer player, PlayerEngine engine) async {
+  Future<void> _safeDestroyPlayer(PlayerEngine engine, {required bool audioOnly}) async {
     try {
-      await player.hardDispose();
-      await playerPool.removeFromCache(engine);
+      await playerPool.removeFromCache(engine, audioOnly: audioOnly);
     } catch (e, s) {
-      log("destroy player error: e", stackTrace: s);
+      log("destroy player error: $e", stackTrace: s);
     }
   }
 
   Future<void> preload(String url, List<String> playUrls, Map<String, String> headers) async {
-    if (_disposed || _isClosing) return;
-    final standby = await playerPool.getPlayer(_runtimeEngine!);
+    if (_disposed || _isClosing || _runtimeEngine == null) return;
+    final standby = await playerPool.getPlayer(_runtimeEngine!, audioOnly: _currentAudioOnly);
     await preloadManager.preload(standby, url, playUrls, headers);
   }
 
@@ -689,7 +719,8 @@ class PlayerManager {
             if (_currentPlayer == null) {
               return _buildPlaceholder();
             }
-            final boxFit = fitList[fitIndex];
+            final safeFitIndex = fitIndex.clamp(0, fitList.length - 1);
+            final boxFit = fitList[safeFitIndex];
             final content = KeyedSubtree(
               key: videoKey.value,
               child: Container(
@@ -740,13 +771,35 @@ class PlayerManager {
     );
   }
 
-  Future<void> close() async {
+  Future<void> close() {
+    if (_disposed) return Future.value();
+    final existing = _closeOperation;
+    if (existing != null) return existing;
+
+    final operation = _performClose();
+    _closeOperation = operation;
+    operation.whenComplete(() {
+      if (identical(_closeOperation, operation)) {
+        _closeOperation = null;
+      }
+    });
+    return operation;
+  }
+
+  Future<void> _performClose() async {
     _sessionId++;
     _isClosing = true;
-    await LiveAudioService.stop();
-    audioLoader.stop();
-    SettingsService.to.player.useHardStopOnExit.v ? await hardDispose() : await softStop();
-    _isClosing = false;
+    try {
+      await LiveAudioService.stop();
+      audioLoader.stop();
+      if (SettingsService.to.player.useHardStopOnExit.v) {
+        await hardDispose();
+      } else {
+        await softStop();
+      }
+    } finally {
+      _isClosing = false;
+    }
   }
 
   Future<void> softStop() async {
@@ -759,7 +812,7 @@ class PlayerManager {
       await _currentPlayer?.softStop();
       _stateSubject.add(PlayerState.idle);
       _playingSubject.add(false);
-    } catch (e) {
+    } catch (_) {
       await hardDispose();
     }
   }
@@ -767,8 +820,9 @@ class PlayerManager {
   Future<void> hardDispose() async {
     lineManager.reset();
     await _clearSubscriptions();
-    if (_runtimeEngine != null) {
-      await playerPool.removeFromCache(_runtimeEngine!);
+    final engine = _runtimeEngine;
+    if (engine != null) {
+      await playerPool.removeFromCache(engine, audioOnly: _currentAudioOnly);
     }
     _currentPlayer = null;
     _runtimeEngine = null;
@@ -782,7 +836,7 @@ class PlayerManager {
   Future<void> _handleError(PlayerException error, {int? sessionId}) async {
     if (_disposed || _isClosing) return;
     if (_isHandlingError) {
-      log("skip duplicated error handling: {error.message}");
+      log("skip duplicated error handling: ${error.message}");
       return;
     }
     final mySessionId = sessionId ?? _sessionId;
@@ -795,35 +849,41 @@ class PlayerManager {
       _stateSubject.add(PlayerState.error);
 
       bool lineSwitched = false;
-      if ((error.type == PlayerErrorType.network || error.type == PlayerErrorType.source) &&
+      final failedUrl = _currentUrl;
+      if (failedUrl != null &&
+          (error.type == PlayerErrorType.network || error.type == PlayerErrorType.source) &&
           _currentPlayUrls.length > 1) {
-        lineManager.markFailed(_currentUrl!);
+        lineManager.markFailed(failedUrl);
         if (!lineManager.hasAvailable(_currentPlayUrls)) {
           log("no available lines, fallback engine");
         } else {
           final nextLine = lineManager.next(_currentPlayUrls);
-          if (nextLine != _currentUrl) {
+          if (nextLine != failedUrl) {
             lineSwitched = true;
-            log("switch line => nextLine");
+            log("switch line => $nextLine");
             await Future.delayed(const Duration(seconds: 2));
             if (!_isSessionValid(mySessionId)) return;
-            await play(nextLine, _currentPlayUrls, _currentHeaders, room: currentFloatRoom);
+            await play(
+              nextLine,
+              _currentPlayUrls,
+              _currentHeaders,
+              room: currentFloatRoom,
+              audioOnly: _currentAudioOnly,
+            );
             return;
           }
         }
       }
 
       log(error.type.toString());
-      if (!lineSwitched && fallbackManager.shouldFallback(error)) {
-        final nextEngine = await fallbackManager.fallback(_runtimeEngine!, error);
-        if (nextEngine == _runtimeEngine) {
-          log("skip fallback: nextEngine(${nextEngine.name}) == currentEngine(${_runtimeEngine?.name})");
+      final runtimeEngine = _runtimeEngine;
+      if (!lineSwitched && runtimeEngine != null && fallbackManager.shouldFallback(error)) {
+        final nextEngine = await fallbackManager.fallback(runtimeEngine, error);
+        if (nextEngine == runtimeEngine) {
+          log("skip fallback: nextEngine(${nextEngine.name}) == currentEngine(${runtimeEngine.name})");
           return;
         }
-        log(
-          "fallback engine: "
-          "${_runtimeEngine?.name} -> ${nextEngine.name}",
-        );
+        log("fallback engine: ${runtimeEngine.name} -> ${nextEngine.name}");
         _isSwitchingDueToFallback = true;
         await Future.delayed(const Duration(milliseconds: 1200));
         if (!_isSessionValid(mySessionId)) return;
@@ -877,7 +937,7 @@ class PlayerManager {
     _subscriptions.add(
       player.onError.listen((error) {
         if (!_isHandlingError) {
-          _handleError(error);
+          unawaited(_handleError(error));
         }
       }),
     );
@@ -917,8 +977,10 @@ class PlayerManager {
     _isClosing = true;
     _hideTimer?.cancel();
     closeAppFloating();
-    _pipSubscription?.cancel();
+    await _pipSubscription?.cancel();
+    await _pipStateSubscription?.cancel();
     await _clearSubscriptions();
+    audioLoader.stop();
     await playerPool.disposeAll();
     await Future.wait([
       _stateSubject.close(),
