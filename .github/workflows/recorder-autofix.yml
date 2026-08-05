@@ -1,0 +1,52 @@
+name: recorder-autofix
+
+on:
+  push:
+    branches:
+      - agent/recorder-lifecycle-stability
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message != 'chore: apply recorder autofix'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/recorder-lifecycle-stability
+      - name: Apply exact recorder fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/recorder/pages/recorder/recorder_controller.dart')
+          text = path.read_text()
+          text = text.replace("import 'dart:developer';\n", '', 1)
+
+          old = '''      token.onCancel = () async {
+                await ffmpeg.stop(task.taskId, operationId: operationId);
+                if (!completer.isCompleted) completer.complete();
+              };'''
+          new = '''      token.onCancel = () async {
+                final hadActiveSession = ffmpeg.isRunning(
+                  task.taskId,
+                  operationId: operationId,
+                );
+                await ffmpeg.stop(task.taskId, operationId: operationId);
+                if (!hadActiveSession && !completer.isCompleted) {
+                  completer.complete();
+                }
+              };'''
+          if old not in text:
+              raise SystemExit('expected cancellation block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/recorder/pages/recorder/recorder_controller.dart
+          git commit -m "chore: apply recorder autofix"
+          git push origin HEAD:agent/recorder-lifecycle-stability
