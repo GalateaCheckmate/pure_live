@@ -8,6 +8,7 @@ import 'package:pure_live/recorder/services/ffmpeg_header_factory.dart';
 
 class AudioStreamLoader {
   String? _currentTaskId;
+  String? _currentOperationId;
   String? _currentAudioUrl;
 
   Future<int> _getAvailablePort() async {
@@ -27,51 +28,75 @@ class AudioStreamLoader {
     required String uniqueId,
     required Function(String audioUrl) onAudioReady,
     Function(FFmpegEvent event)? onFFmpegEvent,
-    required String platform, // 用于构建FFmpeg请求头
+    required String platform,
   }) async {
-    if (_currentTaskId != null) {
-      stop();
-    }
+    await stop();
 
-    _currentTaskId = "audio_only_$uniqueId";
+    final nonce = DateTime.now().microsecondsSinceEpoch;
+    final taskId = 'audio_only_${uniqueId}_$nonce';
+    final operationId = '$taskId:$nonce';
+    _currentTaskId = taskId;
+    _currentOperationId = operationId;
 
-    int port = await _getAvailablePort();
-    _currentAudioUrl = "http://localhost:$port/live.ts";
+    final port = await _getAvailablePort();
+    if (!_isCurrent(taskId, operationId)) return;
 
-    log('AudioStreamLoader: 分配空闲端口 -> $port, URL -> $_currentAudioUrl');
+    final audioUrl = 'http://localhost:$port/live.ts';
+    _currentAudioUrl = audioUrl;
+    log('AudioStreamLoader: 分配空闲端口 -> $port, URL -> $audioUrl');
 
     final headers = await FFmpegHeaderFactory.build(platform: platform);
+    if (!_isCurrent(taskId, operationId)) return;
 
-    final cmd = FFmpegCommandBuilder.buildAudioStreamCommand(
+    final command = FFmpegCommandBuilder.buildAudioStreamCommand(
       headers: headers,
       remoteStreamUrl: remoteStreamUrl,
       port: port,
     );
-    await FFmpegService.to.start(
-      taskId: _currentTaskId!,
-      command: cmd,
-      onEvent: (event) {
-        if (onFFmpegEvent != null) {
-          onFFmpegEvent(event);
-        }
-        if (event.type == FFmpegEventType.started) {
-          log('AudioStreamLoader: FFmpeg 本地服务器已在端口 $port 启动监听');
-          if (_currentAudioUrl != null) {
-            onAudioReady(_currentAudioUrl!);
+
+    try {
+      await FFmpegService.to.start(
+        taskId: taskId,
+        operationId: operationId,
+        command: command,
+        onEvent: (event) {
+          if (!_isCurrent(taskId, operationId) || event.operationId != operationId) return;
+          onFFmpegEvent?.call(event);
+
+          if (event.type == FFmpegEventType.started) {
+            log('AudioStreamLoader: FFmpeg 本地服务器已在端口 $port 启动监听');
+            onAudioReady(audioUrl);
+          } else if (event.type == FFmpegEventType.complete || event.type == FFmpegEventType.error) {
+            _clearCurrent(taskId, operationId);
           }
-        }
-      },
-    );
+        },
+      );
+    } catch (e, stackTrace) {
+      if (_isCurrent(taskId, operationId)) {
+        _clearCurrent(taskId, operationId);
+        log('AudioStreamLoader: 启动音频流失败: $e', stackTrace: stackTrace);
+      }
+    }
   }
 
-  void stop() {
-    if (_currentTaskId == null) return;
+  Future<void> stop() async {
+    final taskId = _currentTaskId;
+    final operationId = _currentOperationId;
+    if (taskId == null || operationId == null) return;
 
-    log('AudioStreamLoader: 正在停止任务 -> $_currentTaskId');
+    log('AudioStreamLoader: 正在停止任务 -> $taskId');
+    _clearCurrent(taskId, operationId);
+    await FFmpegService.to.stop(taskId, operationId: operationId);
+  }
 
-    FFmpegService.to.stop(_currentTaskId!);
+  bool _isCurrent(String taskId, String operationId) {
+    return _currentTaskId == taskId && _currentOperationId == operationId;
+  }
 
+  void _clearCurrent(String taskId, String operationId) {
+    if (!_isCurrent(taskId, operationId)) return;
     _currentTaskId = null;
+    _currentOperationId = null;
     _currentAudioUrl = null;
   }
 
