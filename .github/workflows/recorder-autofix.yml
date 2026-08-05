@@ -2,49 +2,32 @@ name: recorder-autofix
 
 on:
   push:
-    branches:
-      - agent/recorder-lifecycle-stability
+    branches: [agent/recorder-lifecycle-stability]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message != 'chore: apply recorder autofix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/recorder-lifecycle-stability
       - name: Apply exact recorder fixes
+        shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('lib/recorder/pages/recorder/recorder_controller.dart')
-          text = path.read_text()
-          text = text.replace("import 'dart:developer';\n", '', 1)
-
-          old = '''      token.onCancel = () async {
-                await ffmpeg.stop(task.taskId, operationId: operationId);
-                if (!completer.isCompleted) completer.complete();
-              };'''
-          new = '''      token.onCancel = () async {
-                final hadActiveSession = ffmpeg.isRunning(
-                  task.taskId,
-                  operationId: operationId,
-                );
-                await ffmpeg.stop(task.taskId, operationId: operationId);
-                if (!hadActiveSession && !completer.isCompleted) {
-                  completer.complete();
-                }
-              };'''
-          if old not in text:
-              raise SystemExit('expected cancellation block not found')
-          path.write_text(text.replace(old, new, 1))
-          PY
+          if [[ "$(git log -1 --pretty=%s)" == "chore: apply recorder autofix" ]]; then
+            exit 0
+          fi
+          sed -i "/^import 'dart:developer';$/d" lib/recorder/pages/recorder/recorder_controller.dart
+          python3 -c 'from pathlib import Path; p=Path("lib/recorder/pages/recorder/recorder_controller.dart"); s=p.read_text(); old="      token.onCancel = () async {\n        await ffmpeg.stop(task.taskId, operationId: operationId);\n        if (!completer.isCompleted) completer.complete();\n      };"; new="      token.onCancel = () async {\n        final hadActiveSession = ffmpeg.isRunning(\n          task.taskId,\n          operationId: operationId,\n        );\n        await ffmpeg.stop(task.taskId, operationId: operationId);\n        if (!hadActiveSession && !completer.isCompleted) {\n          completer.complete();\n        }\n      };"; assert old in s, "expected cancellation block not found"; p.write_text(s.replace(old,new,1))'
       - name: Commit fix
+        shell: bash
         run: |
+          if git diff --quiet; then
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/recorder/pages/recorder/recorder_controller.dart
