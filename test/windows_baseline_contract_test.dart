@@ -42,5 +42,15 @@ void main() {
       expect(source, contains('flutter build windows --release'));
       expect(source, contains('windows_baseline.ps1'));
     });
+
+    test('Flutter version is synchronized across Windows workflows', () {
+      final fvm = readRepositoryFile('.fvmrc');
+      final ci = readRepositoryFile('.github/workflows/windows-ci.yml');
+      final release = readRepositoryFile('.github/workflows/release.yml');
+
+      expect(fvm, contains('3.44.8'));
+      expect(ci, contains('flutter-version: "3.44.8"'));
+      expect(release, contains('flutter-version: "3.44.8"'));
+    });
   });
 }
