@@ -13,7 +13,7 @@
 
 ## Build, Test, and Development Commands
 
-Use Flutter `3.38.3` (see `.fvmrc`; with FVM, prefix commands with `fvm`).
+Use Flutter `3.44.8` (see `.fvmrc`; with FVM, prefix commands with `fvm`). This version provides a Dart SDK compatible with the `^3.10.4` constraint in `pubspec.yaml`.
 
 - `flutter pub get`: install dependencies
 - `flutter run`: run on a device/emulator
