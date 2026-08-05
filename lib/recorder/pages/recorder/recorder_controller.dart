@@ -467,12 +467,13 @@ class RecorderController extends GetxService {
   }
 
   Duration _retryDelay(int retryCount) {
-    final base = settings.retryDelay.value.clamp(1, 3600);
+    final base = settings.retryDelay.value.clamp(1, 3600).toInt();
     if (!settings.enableBackoff.value) return Duration(seconds: base);
 
-    final exponent = (retryCount - 1).clamp(0, 6);
-    final seconds = base * (1 << exponent);
-    return Duration(seconds: seconds.clamp(base, settings.maxCheckInterval.value.clamp(base, 86400)));
+    final exponent = (retryCount - 1).clamp(0, 6).toInt();
+    final maxDelay = settings.maxCheckInterval.value.clamp(base, 86400).toInt();
+    final seconds = (base * (1 << exponent)).clamp(base, maxDelay).toInt();
+    return Duration(seconds: seconds);
   }
 
   void _completeLifecycle(String taskId, String? operationId) {
@@ -497,7 +498,7 @@ class RecorderController extends GetxService {
     if (_disposed || !settings.enablePolling.value || task.wasStoppedByUser) return;
     if (_pollTimers.containsKey(task.taskId)) return;
 
-    final interval = Duration(seconds: settings.liveCheckInterval.value.clamp(5, 86400));
+    final interval = Duration(seconds: settings.liveCheckInterval.value.clamp(5, 86400).toInt());
     _pollTimers[task.taskId] = Timer.periodic(interval, (_) async {
       if (!_pollChecksInFlight.add(task.taskId)) return;
       try {
@@ -562,8 +563,9 @@ class RecorderController extends GetxService {
     _cancelRetry(task.taskId);
     await scheduler.cancel(task.taskId);
 
-    final operationId = _activeOperationIds.remove(task.taskId);
+    final operationId = _activeOperationIds[task.taskId];
     _completeLifecycle(task.taskId, operationId);
+    _activeOperationIds.remove(task.taskId);
     _lifecycleCompleters.remove(task.taskId);
     tasks.removeWhere((item) => item.taskId == task.taskId);
     _sortTasks();
