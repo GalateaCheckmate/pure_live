@@ -24,9 +24,9 @@ class FFmpegScheduler {
 
   int get maxConcurrentTasks {
     final provided = _maxConcurrentTasksProvider?.call();
-    if (provided != null) return provided.clamp(1, 64);
+    if (provided != null) return provided.clamp(1, 64).toInt();
     if (Get.isRegistered<RecordSettingsController>()) {
-      return Get.find<RecordSettingsController>().maxTaskCount.value.clamp(1, 64);
+      return Get.find<RecordSettingsController>().maxTaskCount.value.clamp(1, 64).toInt();
     }
     log('RecordSettingsController not found, using fallback 1', name: 'FFmpegScheduler');
     return 1;
