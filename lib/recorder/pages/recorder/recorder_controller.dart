@@ -581,8 +581,8 @@ class RecorderController extends GetxService {
     _restoring = true;
     try {
       final candidates = [
-        HivePrefUtil.getString(RecorderKeys.recorderTasks),
         HivePrefUtil.getString(RecorderKeys.recorderTasksPending),
+        HivePrefUtil.getString(RecorderKeys.recorderTasks),
         HivePrefUtil.getString(RecorderKeys.recorderTasksBackup),
       ];
 
