@@ -101,7 +101,7 @@ class VideoProcessorService extends GetxService {
               VideoProcessEvent(
                 taskId: taskId,
                 type: VideoProcessEventType.progress,
-                progress: (time / duration).clamp(0.0, 1.0),
+                progress: (time / duration).clamp(0.0, 1.0).toDouble(),
               ),
             );
             break;
