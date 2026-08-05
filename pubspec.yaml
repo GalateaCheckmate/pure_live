@@ -6,11 +6,9 @@ version: 2.0.22+33
 environment:
   sdk: ^3.10.4
 
-# 主依赖
 dependencies:
   flutter:
     sdk: flutter
-
   flutter_localizations:
     sdk: flutter
 
@@ -135,7 +133,6 @@ dependencies:
   fixnum: ^1.1.0
   dlna_dart: ^0.1.0
   url_launcher: ^6.1.12
-  share_handler: ^0.0.25
   animated_splash_plus: ^1.0.3
   flutter_exit_app: ^2.0.0
   package_info_plus: ^10.1.0
