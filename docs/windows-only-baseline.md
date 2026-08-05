@@ -1,53 +1,44 @@
-# Windows-only baseline
+# PureLive Windows-only baseline
 
-This branch establishes a safe Windows-only development baseline without removing
-the existing player engines, account services, recording features or live
-platform integrations.
+PureLive is now developed and distributed as a Windows-only Flutter desktop application.
 
-## Scope
+## Supported target
 
-- Required database and settings services are awaited before the first frame.
-- FFmpeg, recording and account services remain deferred until startup finishes.
-- GitHub CI analyzes, tests and builds only the Windows target.
-- Release automation produces Windows packages only.
-- The invalid template counter test is replaced with architecture contract tests.
-- The self-export in `lib/common/index.dart` is removed.
-- A PowerShell baseline collector records package size and can optionally record
-  process startup and memory data on a real Windows desktop.
+- Windows x64
+- Flutter 3.44.8
+- Dart compatible with `^3.10.4`
+- FFmpeg Windows bundle 0.10.5
 
-## CI baseline
+## Removed platform projects
 
-Every push to `master` or `agent/**` produces:
+The Android, iOS, Linux and macOS native projects have been removed. The repository does not carry a Web runner.
 
-- a Windows release directory artifact;
-- `windows-baseline.json` containing release size and file count.
+## Windows-only application lifecycle
 
-GitHub-hosted runners use `-SkipLaunch` because they are not a reliable
-interactive desktop benchmark.
+- The application bootstrap always initializes the Windows desktop window manager.
+- MediaKit is the fixed default playback engine during startup.
+- Windows single-instance handling is part of the required startup chain.
+- Windows brightness and launch-at-startup initialization run without cross-platform branches.
+- The obsolete mobile platform manager and Android shared-media bootstrap have been removed.
+- `PlatformUtils` remains temporarily as a compatibility facade returning Windows constants while older call sites are migrated.
 
-## Local runtime baseline
+## Dependency cleanup
 
-After building the release on Windows, run:
+Removed platform-specific build and runtime configuration includes:
 
-```powershell
-flutter build windows --release
-./tool/windows_baseline.ps1
-```
+- Android, iOS, Linux and macOS MediaKit overrides
+- Android, iOS and macOS icon generation
+- Android and macOS FFmpeg bundles
+- Android intents, mobile orientation, mobile scanner and mobile floating-window packages
+- Mobile share-handler integration
+- macOS DMG packaging
 
-The default report is written to:
+The remaining Android recorder storage-permission block is captured in:
 
-```text
-build/windows-baseline.json
-```
+`development/patches/windows-only-recorder-permission-cleanup.diff`
 
-It contains:
+It is staged as a patch because the recorder lifecycle branch contains newer concurrent changes. The patch removes the Android permission flow and its `permission_handler` and `device_info_plus` dependencies when the recorder branch is integrated.
 
-- time until a responsive main window is detected;
-- working-set memory after the warm-up period;
-- private memory;
-- consumed CPU time;
-- release directory size and file count.
+## Development policy
 
-Refresh latency and playback CPU/GPU usage require an interactive test against
-real live rooms, so they should be recorded separately after this structural
-baseline is green.
+Development commits use `[skip ci]` until the Windows baseline, player lifecycle and recorder lifecycle branches are consolidated. GitHub Actions and the final Windows build are run only after that consolidation.
