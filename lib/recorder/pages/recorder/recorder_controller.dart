@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'dart:async';
-import 'dart:developer';
 import 'dart:developer' as developer;
 import 'package:open_filex/open_filex.dart';
 import 'package:pure_live/common/index.dart';
@@ -332,8 +331,14 @@ class RecorderController extends GetxService {
       updateTask(task);
 
       token.onCancel = () async {
+        final hadActiveSession = ffmpeg.isRunning(
+          task.taskId,
+          operationId: operationId,
+        );
         await ffmpeg.stop(task.taskId, operationId: operationId);
-        if (!completer.isCompleted) completer.complete();
+        if (!hadActiveSession && !completer.isCompleted) {
+          completer.complete();
+        }
       };
 
       await ffmpeg.start(
