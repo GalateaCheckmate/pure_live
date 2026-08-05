@@ -1,0 +1,139 @@
+diff --git a/lib/recorder/models/live_record_task.dart b/lib/recorder/models/live_record_task.dart
+index 3fa3c82..8c4cbe1 100644
+--- a/lib/recorder/models/live_record_task.dart
++++ b/lib/recorder/models/live_record_task.dart
+@@ -50,6 +50,9 @@ class LiveRecordTask {
+   /// 输出目录
+   String? outputDir;
+ 
++  /// 本轮录制真正开始的时间；区别于任务被添加到录播列表的时间
++  DateTime? recordingStartedAt;
++
+   /// =========================
+   /// 实时录制状态
+   /// =========================
+@@ -108,6 +111,7 @@ class LiveRecordTask {
+     this.selectedLine,
+     this.selectedQuality,
+     this.outputDir,
++    this.recordingStartedAt,
+ 
+     /// 实时信息
+     this.recordedSeconds = 0,
+@@ -207,6 +211,7 @@ class LiveRecordTask {
+     "selectedLine": selectedLine,
+     "selectedQuality": selectedQuality,
+     "outputDir": outputDir,
++    "recordingStartedAt": recordingStartedAt?.toIso8601String(),
+ 
+     /// 实时信息
+     "recordedSeconds": recordedSeconds,
+@@ -277,6 +282,9 @@ class LiveRecordTask {
+ 
+       outputDir: json["outputDir"],
+ 
++      recordingStartedAt: json["recordingStartedAt"] != null
++          ? DateTime.tryParse(json["recordingStartedAt"])
++          : null,
++
+       /// 实时录制
+       recordedSeconds: json["recordedSeconds"] ?? 0,
+ 
+diff --git a/lib/recorder/pages/recorder/recorder_controller.dart b/lib/recorder/pages/recorder/recorder_controller.dart
+index 85ee4d0..2d852d5 100644
+--- a/lib/recorder/pages/recorder/recorder_controller.dart
++++ b/lib/recorder/pages/recorder/recorder_controller.dart
+@@ -286,6 +286,7 @@ class RecorderController extends GetxService {
+     task.bitrate = 0;
+     task.fps = 0;
+     task.lastUpdate = DateTime.now();
++    task.recordingStartedAt = null;
+     updateTask(task);
+ 
+     final completer = Completer<void>();
+@@ -328,6 +329,7 @@ class RecorderController extends GetxService {
+       task.currentUrl = url;
+       task.selectedQuality = settings.defaultQuality.value;
+       task.outputDir = dir.path;
++      task.recordingStartedAt = DateTime.now();
+       updateTask(task);
+ 
+       token.onCancel = () async {
+@@ -404,7 +406,11 @@ class RecorderController extends GetxService {
+         updateTask(task);
+         final processed = await _processVideo(task);
+         if (!_isOperationActive(task.taskId, operationId)) return;
+-        task.status = processed ? RecordStatus.completed : RecordStatus.failed;
++        task.status = processed
++            ? (manualStop || task.wasStoppedByUser
++                ? RecordStatus.stopped
++                : RecordStatus.completed)
++            : RecordStatus.failed;
+       } else {
+         task.status = manualStop ? RecordStatus.stopped : RecordStatus.completed;
+       }
+@@ -452,7 +458,13 @@ class RecorderController extends GetxService {
+   }
+ 
+   void _startPolling(LiveRecordTask task) {
+-    if (_disposed || !settings.enablePolling.value || task.wasStoppedByUser) return;
++    if (_disposed || task.wasStoppedByUser) return;
++    if (!settings.enablePolling.value) {
++      developer.log(
++        'Recorder polling is disabled; ${task.taskId} will remain waiting until manually refreshed.',
++        name: 'RecorderController',
++      );
++      return;
++    }
+     if (_pollTimers.containsKey(task.taskId)) return;
+ 
+     final interval = Duration(seconds: settings.liveCheckInterval.value.clamp(5, 86400).toInt());
+diff --git a/lib/recorder/services/video_processor_service.dart b/lib/recorder/services/video_processor_service.dart
+index cb4339a..5a76db9 100644
+--- a/lib/recorder/services/video_processor_service.dart
++++ b/lib/recorder/services/video_processor_service.dart
+@@ -57,14 +57,14 @@ class VideoProcessorService extends GetxService {
+       }
+       await listFile.writeAsString(buffer.toString(), flush: true);
+ 
+-      final createdAt = task.createTime;
++      final startedAt = task.recordingStartedAt ?? task.createTime;
+       final date =
+-          '${createdAt.year}'
+-          '${createdAt.month.toString().padLeft(2, '0')}'
+-          '${createdAt.day.toString().padLeft(2, '0')}_'
+-          '${createdAt.hour.toString().padLeft(2, '0')}'
+-          '${createdAt.minute.toString().padLeft(2, '0')}'
+-          '${createdAt.second.toString().padLeft(2, '0')}';
++          '${startedAt.year}'
++          '${startedAt.month.toString().padLeft(2, '0')}'
++          '${startedAt.day.toString().padLeft(2, '0')}_'
++          '${startedAt.hour.toString().padLeft(2, '0')}'
++          '${startedAt.minute.toString().padLeft(2, '0')}'
++          '${startedAt.second.toString().padLeft(2, '0')}';
+       final outputPath = p.join(tsDir.path, '$date.mp4');
+ 
+       ffmpegTaskId = 'merge_$taskId';
+@@ -99,13 +99,23 @@ class VideoProcessorService extends GetxService {
+             );
+             break;
+           case FFmpegEventType.complete:
++            final outputFile = File(outputPath);
++            final outputValid = outputFile.existsSync() && outputFile.lengthSync() > 0;
++            if (!outputValid) {
++              _emitFailed(taskId, i18n('video_ffmpeg_failed'));
++              if (!completer.isCompleted) completer.complete(false);
++              break;
++            }
++
+             _controller.add(
+               VideoProcessEvent(
+                 taskId: taskId,
+                 type: VideoProcessEventType.completed,
+                 outputPath: outputPath,
+               ),
+             );
++            // 只有确认 MP4 已成功落盘后才删除 TS，失败时保留原始分段以便恢复。
+             if (deleteSourceTs) _deleteTsFiles(tsDir, taskId);
+             if (!completer.isCompleted) completer.complete(true);
+             break;
