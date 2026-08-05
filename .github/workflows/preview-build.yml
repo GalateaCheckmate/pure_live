@@ -1,0 +1,114 @@
+name: preview-build
+
+on:
+  push:
+    branches:
+      - build/2.0.22-recorder-preview
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android universal APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout preview source
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+
+      - name: Restore Android signing key
+        id: android_keystore
+        uses: timheuer/base64-to-file@v1.2
+        with:
+          fileName: key.jks
+          encodedString: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Create key.properties
+        shell: bash
+        run: |
+          echo "storeFile=${{ steps.android_keystore.outputs.filePath }}" > android/key.properties
+          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> android/key.properties
+          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
+          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build signed universal APK
+        run: flutter build apk --release
+
+      - name: Rename APK
+        shell: bash
+        run: mv build/app/outputs/flutter-apk/app-release.apk PureLive-2.0.22-recorder-preview-android-universal.apk
+
+      - name: Create checksum
+        shell: bash
+        run: sha256sum PureLive-2.0.22-recorder-preview-android-universal.apk > PureLive-2.0.22-recorder-preview-android-universal.apk.sha256
+
+      - name: Upload Android package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PureLive-2.0.22-recorder-preview-android
+          path: |
+            PureLive-2.0.22-recorder-preview-android-universal.apk
+            PureLive-2.0.22-recorder-preview-android-universal.apk.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64 portable
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout preview source
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.44.8
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $source = "build/windows/x64/runner/Release/*"
+          $zip = "PureLive-2.0.22-recorder-preview-windows-x64-portable.zip"
+          Compress-Archive -Path $source -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File "$zip.sha256" -Encoding ascii
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: PureLive-2.0.22-recorder-preview-windows
+          path: |
+            PureLive-2.0.22-recorder-preview-windows-x64-portable.zip
+            PureLive-2.0.22-recorder-preview-windows-x64-portable.zip.sha256
+          retention-days: 7
+          if-no-files-found: error
