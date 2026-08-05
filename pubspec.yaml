@@ -1,5 +1,5 @@
 name: pure_live
-description: 纯粹直播,一款开源的第三方多平台直播聚合播放器.
+description: 纯粹直播，一款 Windows 专用的第三方多平台直播聚合播放器。
 publish_to: none
 version: 2.0.22+33
 
@@ -14,12 +14,12 @@ dependencies:
   flutter_localizations:
     sdk: flutter
 
-  hashlib: ^2.0.0 # 哈希计算工具
-  crypto: ^3.0.7 # 加密解密工具库
-  crypto_simple: ^3.0.0 # 简易加密工具
-  uuid: ^4.5.3 # 生成唯一标识符
-  html_unescape: ^2.0.0 # HTML转义字符解码
-  brotli: ^0.6.0 # Brotli压缩解压
+  hashlib: ^2.0.0
+  crypto: ^3.0.7
+  crypto_simple: ^3.0.0
+  uuid: ^4.5.3
+  html_unescape: ^2.0.0
+  brotli: ^0.6.0
   equatable: ^2.0.7
   xml: ^6.5.0
   archive: ^4.0.4
@@ -31,20 +31,18 @@ dependencies:
   share_plus: ^13.1.0
   photo_view: ^0.15.0
   flutter_json: ^0.1.0
-  # Local database (SQLite)
   drift: ^2.33.0
   sqlite3_flutter_libs: ^0.6.0+eol
   charset_converter: ^2.3.0
   synchronized: ^3.1.0
   meta: ^1.18.2
-  # -------------------------- 网络请求/网络状态 --------------------------
-  http: ^1.1.0 # 基础HTTP请求
-  dio: ^5.9.0 # 强大的Dart HTTP客户端
-  dio_cookie_manager: ^3.3.0 # Dio的Cookie管理插件
-  cookie_jar: ^4.0.8 # Cookie持久化存储
-  web_socket_channel: ^3.0.1 # WebSocket通信
-  connectivity_plus: ^6.1.4 # 网络连接状态监听
-  webdav_client: ^1.2.2 # WebDAV文件存储客户端
+  http: ^1.1.0
+  dio: ^5.9.0
+  dio_cookie_manager: ^3.3.0
+  cookie_jar: ^4.0.8
+  web_socket_channel: ^3.0.1
+  connectivity_plus: ^6.1.4
+  webdav_client: ^1.2.2
   firebase_core: ^4.10.0
   firebase_auth: ^6.5.2
   cloud_firestore: ^6.5.0
@@ -54,7 +52,6 @@ dependencies:
   loading_animation_widget: ^1.3.0
   loading_indicator: ^3.1.1
   flame_barrage: ^0.0.3
-  # -------------------------- 音视频播放 --------------------------
   media_kit:
     git:
       url: https://github.com/Predidit/media-kit.git
@@ -71,110 +68,82 @@ dependencies:
       ref: main
       path: ./libs/universal/media_kit_libs_video
   video_player: ^2.11.1
-  better_player_plus: ^1.3.0 # 高级视频播放器
-  audio_service: ^0.18.18 # 后台音频服务
+  better_player_plus: ^1.3.0
+  audio_service: ^0.18.18
   audio_service_win: ^0.0.3
-  audio_session: ^0.2.3 # 音频会话管理
+  audio_session: ^0.2.3
   ffmpeg_kit_extended_flutter: ^0.5.7
   flv_lzc:
-    git: https://github.com/liuchuancong/flv_lzc.git # ijk视频解析
-
-  # -------------------------- UI组件/界面样式 --------------------------
-  flutter_svg: ^2.2.1 # SVG图片渲染
-  lottie: ^3.3.3 #动画
-  cached_network_image: ^3.3.0 # 网络图片缓存
-  dynamic_color: ^1.8.1 # 动态主题色
-  waterfall_flow: ^3.1.1 # 瀑布流布局
-  easy_refresh: ^3.5.0 # 下拉刷新/上拉加载
-  flutter_smart_dialog: ^5.1.0 # 自定义弹窗
-  flex_color_picker: ^3.7.2 # 颜色选择器
-  bordered_text: ^3.0.2 # 带边框文字
-  flutter_color: ^2.1.0 # 颜色工具
-  syncfusion_flutter_sliders: ^33.2.5 # 滑块组件
-  markdown_widget: ^2.3.2+8 # Markdown渲染
-
-  # -------------------------- 图标/字体 --------------------------
-  font_awesome_flutter: ^11.0.0 # Font Awesome图标
-  remixicon: ^4.9.3 # Remix图标库
-  google_fonts: ^8.1.0 # 谷歌字体
-
-  # -------------------------- 窗口/桌面端控制 --------------------------
-  window_manager: ^0.5.1 # 桌面端窗口管理
+    git: https://github.com/liuchuancong/flv_lzc.git
+  flutter_svg: ^2.2.1
+  lottie: ^3.3.3
+  cached_network_image: ^3.3.0
+  dynamic_color: ^1.8.1
+  waterfall_flow: ^3.1.1
+  easy_refresh: ^3.5.0
+  flutter_smart_dialog: ^5.1.0
+  flex_color_picker: ^3.7.2
+  bordered_text: ^3.0.2
+  flutter_color: ^2.1.0
+  syncfusion_flutter_sliders: ^33.2.5
+  markdown_widget: ^2.3.2+8
+  font_awesome_flutter: ^11.0.0
+  remixicon: ^4.9.3
+  google_fonts: ^8.1.0
+  window_manager: ^0.5.1
   windows_single_instance:
     path: ./plugins/windows_single_instance
-  tray_manager: ^0.5.2 # 系统托盘管理
-  flutter_acrylic: ^1.1.4 # 亚克力毛玻璃效果
+  tray_manager: ^0.5.2
+  flutter_acrylic: ^1.1.4
   screen_retriever:
-    git: 
+    git:
       url: https://github.com/liuchuancong/screen_retriever.git
       path: ./packages/screen_retriever
       ref: main
-  win32: ^6.3.0 # Windows系统API
-  android_intent_plus: ^6.0.0
+  win32: ^6.3.0
   fullscreen_window: ^1.2.0
-
-  # -------------------------- 设备/系统权限/硬件 --------------------------
-  screen_brightness: ^2.1.2 # 屏幕亮度控制
-  volume_controller: ^3.4.4 # 音量控制
-  wakelock_plus: ^1.4.0 # 保持屏幕常亮
-  battery_plus: ^7.0.0 # 电池状态获取
-  permission_handler: ^12.0.1 # 权限管理
-  device_info_plus: ^13.1.0 # 设备信息
-  auto_orientation_v2: ^2.3.6 # 屏幕自动旋转
-  mobile_scanner: ^7.1.3 # 二维码扫描
-
-  # -------------------------- 数据存储/数据库 --------------------------
-  hive_ce: ^2.15.1 # Hive本地数据库
-  hive_ce_flutter: ^2.3.3 # Hive Flutter集成
-  flutter_cache_manager: ^3.4.1 # 通用缓存管理
-
-  # -------------------------- 文件/路径/存储 --------------------------
-  path_provider: ^2.1.5 # 获取文件路径
-  path: ^1.9.1 # 路径处理
-  file: ^7.0.1 # 文件操作
-  file_picker: ^12.0.0-beta.5 # 文件选择器
-  uri_to_file: ^1.0.0 # URI转文件
-  open_filex: ^4.7.0 # 打开本地文件
-  mime: ^2.0.0 # MIME类型处理
-
-  # -------------------------- 工具/通用库 --------------------------
-
-  timezone: ^0.11.0 # 时区处理
-  date_format: ^2.0.9 # 日期格式化
-  logger: ^2.6.2 # 日志打印
-  quiver: ^3.2.1 # 实用工具集
-  ffi: ^2.2.0 # 本地代码交互
-  rxdart: ^0.28.0 # 响应式编程
-  pinyindart: ^0.0.1 # 汉字转拼音
-  dart_sm: ^0.1.5 # 工具库
-
-  # -------------------------- 网页/JS解析 --------------------------
-  flutter_js: ^0.8.5 # JS引擎执行
-  html: ^0.15.4 # HTML解析
-  flutter_inappwebview: ^6.2.0-beta.3 # 内置浏览器
+  screen_brightness: ^2.1.2
+  volume_controller: ^3.4.4
+  wakelock_plus: ^1.4.0
+  battery_plus: ^7.0.0
+  permission_handler: ^12.0.1
+  device_info_plus: ^13.1.0
+  hive_ce: ^2.15.1
+  hive_ce_flutter: ^2.3.3
+  flutter_cache_manager: ^3.4.1
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  file: ^7.0.1
+  file_picker: ^12.0.0-beta.5
+  uri_to_file: ^1.0.0
+  open_filex: ^4.7.0
+  mime: ^2.0.0
+  timezone: ^0.11.0
+  date_format: ^2.0.9
+  logger: ^2.6.2
+  quiver: ^3.2.1
+  ffi: ^2.2.0
+  rxdart: ^0.28.0
+  pinyindart: ^0.0.1
+  dart_sm: ^0.1.5
+  flutter_js: ^0.8.5
+  html: ^0.15.4
+  flutter_inappwebview: ^6.2.0-beta.3
   dart_quickjs:
-    git: https://github.com/liuchuancong/dart_quickjs.git # QuickJS引擎
-
-  # -------------------------- 直播协议/定制SDK --------------------------
-  protobuf: ^6.0.0 # Protocol Buffers
-  fixnum: ^1.1.0 # 固定精度数字
-  dlna_dart: ^0.1.0 # DLNA投屏
-
-  # -------------------------- 功能组件 --------------------------
-  url_launcher: ^6.1.12 # 打开外部链接
-  share_handler: ^0.0.25 # 分享功能
-  animated_splash_plus: ^1.0.3 # 启动动画
-  flutter_exit_app: ^2.0.0 # 退出应用
-  move_to_desktop: ^0.0.2 # 移动到桌面
-  package_info_plus: ^10.1.0 # 应用包信息
-  stop_watch_timer: ^3.2.2 # 计时器
-  floating: ^6.0.0 # 悬浮窗
-  flutter_floating: ^2.0.1 # 悬浮窗
-  qr_flutter: ^4.1.0 # 二维码生成
-  back_button_interceptor: ^8.0.4 # 返回键拦截
-  easy_localization: ^3.0.8 #多语言
+    git: https://github.com/liuchuancong/dart_quickjs.git
+  protobuf: ^6.0.0
+  fixnum: ^1.1.0
+  dlna_dart: ^0.1.0
+  url_launcher: ^6.1.12
+  share_handler: ^0.0.25
+  animated_splash_plus: ^1.0.3
+  flutter_exit_app: ^2.0.0
+  package_info_plus: ^10.1.0
+  stop_watch_timer: ^3.2.2
+  qr_flutter: ^4.1.0
+  easy_localization: ^3.0.8
   app_links: 7.0.0
-# 依赖覆盖（强制指定版本）
+
 dependency_overrides:
   wakelock_plus: ^1.4.0
   app_links: 7.0.0
@@ -195,75 +164,36 @@ dependency_overrides:
       url: https://github.com/Predidit/media-kit.git
       ref: main
       path: ./libs/universal/media_kit_libs_video
-  media_kit_libs_linux:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/linux/media_kit_libs_linux
-  media_kit_libs_ios_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/ios/media_kit_libs_ios_video
-  media_kit_libs_android_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/android/media_kit_libs_android_video
   media_kit_libs_windows_video:
     git:
       url: https://github.com/Predidit/media-kit.git
       ref: main
       path: ./libs/windows/media_kit_libs_windows_video
-  media_kit_libs_macos_video:
-    git:
-      url: https://github.com/Predidit/media-kit.git
-      ref: main
-      path: ./libs/macos/media_kit_libs_macos_video
   screen_retriever:
-    git: 
+    git:
       url: https://github.com/liuchuancong/screen_retriever.git
       path: ./packages/screen_retriever
       ref: main
 
-
-# 开发依赖
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  change_app_package_name: any # 修改应用包名
-  json_serializable: ^6.7.1 # JSON序列化
-  build_runner: ^2.4.15 # 代码生成器
-  flutter_launcher_icons: ^0.14.4 # 应用图标生成
-  msix: ^3.16.12 # Windows安装包打包
-  intl_utils: ^2.8.11 # 国际化工具
-  flutter_lints: ^6.0.0 # 代码规范检查
-  dmg: ^0.1.7 # macOS安装包打包
+  json_serializable: ^6.7.1
+  build_runner: ^2.4.15
+  flutter_launcher_icons: ^0.14.4
+  msix: ^3.16.12
+  intl_utils: ^2.8.11
+  flutter_lints: ^6.0.0
   drift_dev: ^2.33.0
 
-# 应用图标配置
 flutter_icons:
-  android: "ic_launcher"
-  ios: true
-  remove_alpha_ios: true
-  image_path: assets/icons/icon.png
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: assets/icons/icon_foreground.png
-  min_sdk_android: 21
   windows:
     generate: true
     image_path: assets/icons/icon.png
     icon_size: 48
-  macos:
-    generate: true
-    image_path: assets/icons/icon.png
 
-# Flutter核心配置
 flutter:
   uses-material-design: true
-  # config:
-  #     enable-swift-package-manager: false
-  # 资源文件
   assets:
     - assets/
     - assets/images/
@@ -283,7 +213,6 @@ flutter:
     - assets/animations/empty.json
     - assets/animations/error.json
     - assets/fonts/fonts-manifest.json
-  # 字体配置
   fonts:
     - family: CustomIcons
       fonts:
@@ -292,12 +221,5 @@ flutter:
       fonts:
         - asset: assets/PingFangSC.ttf
 
-# FFmpeg配置
-# ffmpeg_kit_extended_config:
-#   type: "base" # pre-bundled builds: debug, base, full, audio, video, video_hw
-#   gpl: true # enable to include GPL libraries
-#   small: true # enable to use smaller builds
 ffmpeg_kit_extended_config:
   windows: https://github.com/akashskypatel/ffmpeg-kit-builders/releases/download/v0.10.5-windows/bundle-base-windows-x86_64-shared-lgpl.zip
-  android: https://github.com/akashskypatel/ffmpeg-kit-builders/releases/download/v0.10.2-android/bundle-base-shared-lgpl-release.aar
-  macos: https://github.com/akashskypatel/ffmpeg-kit-builders/releases/download/v0.10.2-macos/bundle-base-macos-universal-lgpl.xcframework.zip
