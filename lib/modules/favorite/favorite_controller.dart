@@ -20,6 +20,7 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
   Timer? _autoRefreshTimer;
   Stopwatch? _refreshStopwatch;
   Timer? _debounceTimer;
+  int _refreshGeneration = 0;
 
   final onlineRooms = <LiveRoom>[].obs;
   final offlineRooms = <LiveRoom>[].obs;
@@ -83,6 +84,7 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
 
   @override
   void onClose() {
+    _refreshGeneration++;
     tabController.dispose();
     subscription?.cancel();
     _configSubscription?.cancel();
@@ -150,15 +152,12 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
       case 0:
         source = onlineRooms;
         break;
-
       case 1:
         source = replayRooms;
         break;
-
       case 2:
         source = offlineRooms;
         break;
-
       default:
         source = onlineRooms;
     }
@@ -194,9 +193,7 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
 
     final List<LiveRoom> roomsBase = List<LiveRoom>.from(SettingsService.to.fav.favoriteRooms.v);
     onlineRooms.addAll(roomsBase.where((r) => r.liveStatus == LiveStatus.live && r.isRecord == false));
-
     offlineRooms.addAll(roomsBase.where((r) => r.liveStatus != LiveStatus.live));
-
     replayRooms.addAll(roomsBase.where((r) => r.liveStatus == LiveStatus.live && r.isRecord == true));
 
     final currentAvailableSites = Sites().availableSites(containsAll: true);
@@ -210,24 +207,20 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
         case 0:
           target = onlineRooms;
           break;
-
         case 1:
           target = replayRooms;
           break;
-
         case 2:
           target = offlineRooms;
           break;
-
         default:
           target = onlineRooms;
       }
-      final Set<String> tagIds = {};
 
+      final Set<String> tagIds = {};
       for (var room in target) {
         if (activeSite.id == Sites.allSite || room.platform?.toUpperCase() == activeSite.id.toUpperCase()) {
-          final ids = tagController.getTagsForRoom(room);
-          tagIds.addAll(ids);
+          tagIds.addAll(tagController.getTagsForRoom(room));
         }
       }
 
@@ -243,24 +236,18 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
       room.watching = int.tryParse(room.watching ?? '')?.toString() ?? '0';
     }
 
-    onlineRooms.sort((a, b) {
-      if (selectedTagId.value == TagManagementController.allTagKey) {
-        return int.parse(b.watching!).compareTo(int.parse(a.watching!));
-      }
-      int sa = _getRoomTagScore(a);
-      int sb = _getRoomTagScore(b);
-      if (sa != sb) return sb.compareTo(sa);
+    onlineRooms.sort(_compareRooms);
+    replayRooms.sort(_compareRooms);
+  }
+
+  int _compareRooms(LiveRoom a, LiveRoom b) {
+    if (selectedTagId.value == TagManagementController.allTagKey) {
       return int.parse(b.watching!).compareTo(int.parse(a.watching!));
-    });
-    replayRooms.sort((a, b) {
-      if (selectedTagId.value == TagManagementController.allTagKey) {
-        return int.parse(b.watching!).compareTo(int.parse(a.watching!));
-      }
-      int sa = _getRoomTagScore(a);
-      int sb = _getRoomTagScore(b);
-      if (sa != sb) return sb.compareTo(sa);
-      return int.parse(b.watching!).compareTo(int.parse(a.watching!));
-    });
+    }
+    final int sa = _getRoomTagScore(a);
+    final int sb = _getRoomTagScore(b);
+    if (sa != sb) return sb.compareTo(sa);
+    return int.parse(b.watching!).compareTo(int.parse(a.watching!));
   }
 
   int _getRoomTagScore(LiveRoom room) {
@@ -293,59 +280,97 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
   }
 
   Future<void> _fullRefreshFilterRooms() async {
+    final int generation = ++_refreshGeneration;
     loadding.value = true;
-    List<LiveRoom> roomsToRefresh = getFilteredRoomsIgnoringLiveStatus();
-    await _refreshRoomDetails(roomsToRefresh);
-    applyLocalFilter();
-    loadding.value = false;
-    EventBus.instance.emit('refresh_favorite_finish', true);
+    try {
+      final roomsToRefresh = getFilteredRoomsIgnoringLiveStatus();
+      final applied = await _refreshRoomDetails(roomsToRefresh, generation);
+      if (applied && generation == _refreshGeneration) {
+        applyLocalFilter();
+        EventBus.instance.emit('refresh_favorite_finish', true);
+      }
+    } finally {
+      if (generation == _refreshGeneration) {
+        loadding.value = false;
+      }
+    }
   }
 
   Future<void> _fullRefreshRooms() async {
+    final int generation = ++_refreshGeneration;
     loadding.value = true;
-    List<LiveRoom> roomsToRefresh = getAllRooms();
-    await _refreshRoomDetails(roomsToRefresh);
-    applyLocalFilter();
-    loadding.value = false;
-    EventBus.instance.emit('refresh_favorite_finish', true);
+    try {
+      final roomsToRefresh = getAllRooms();
+      final applied = await _refreshRoomDetails(roomsToRefresh, generation);
+      if (applied && generation == _refreshGeneration) {
+        applyLocalFilter();
+        EventBus.instance.emit('refresh_favorite_finish', true);
+      }
+    } finally {
+      if (generation == _refreshGeneration) {
+        loadding.value = false;
+      }
+    }
   }
 
-  Future<void> _refreshRoomDetails(List<LiveRoom> rooms) async {
-    final valid = rooms.where((r) => r.platform?.isNotEmpty ?? false).toList();
-    if (valid.isEmpty) return;
+  Future<bool> _refreshRoomDetails(List<LiveRoom> rooms, int generation) async {
+    final valid = rooms.where((room) {
+      return room.roomId != null && (room.platform?.isNotEmpty ?? false);
+    }).toList(growable: false);
+
+    if (valid.isEmpty) return true;
 
     _refreshStopwatch = Stopwatch()..start();
 
-    final int batch = refreshConfigController.maxConcurrentRefresh.value > 0
-        ? refreshConfigController.maxConcurrentRefresh.value
-        : 5;
-
-    for (int i = 0; i < valid.length; i += batch) {
-      final end = i + batch > valid.length ? valid.length : i + batch;
-      final batchRooms = valid.sublist(i, end);
-
-      try {
-        final futures = batchRooms
-            .map(
-              (room) => Sites.of(room.platform!).liveSite.getRoomDetail(roomId: room.roomId!, platform: room.platform!),
-            )
-            .toList();
-
-        final results = await Future.wait(futures);
-        for (var updated in results) {
-          final list = List<LiveRoom>.from(SettingsService.to.fav.favoriteRooms.v);
-          final idx = list.indexWhere((e) => e.roomId == updated.roomId && e.platform == updated.platform);
-          if (idx != -1) {
-            list[idx] = updated;
-            SettingsService.to.fav.favoriteRooms.v = list;
+    try {
+      // Start every room request immediately. Each request handles its own
+      // failure so one slow or broken platform cannot cancel the whole refresh.
+      final results = await Future.wait<LiveRoom?>(
+        valid.map((room) async {
+          try {
+            return await Sites.of(room.platform!)
+                .liveSite
+                .getRoomDetail(roomId: room.roomId!, platform: room.platform!)
+                .timeout(const Duration(seconds: 20));
+          } catch (error, stackTrace) {
+            developer.log(
+              'Failed to refresh ${room.platform}:${room.roomId}: $error',
+              name: 'FavoriteController',
+              stackTrace: stackTrace,
+            );
+            return null;
           }
-        }
-      } catch (e) {
-        developer.log('Error refreshing room details: $e');
-      }
-    }
+        }),
+      );
 
-    _refreshStopwatch?.stop();
-    _refreshStopwatch = null;
+      if (generation != _refreshGeneration) {
+        return false;
+      }
+
+      final Map<String, LiveRoom> refreshedByKey = {};
+      for (final updated in results) {
+        if (updated == null || updated.roomId == null || updated.platform == null) continue;
+        refreshedByKey[_roomKey(updated)] = updated;
+      }
+
+      if (refreshedByKey.isEmpty) {
+        return true;
+      }
+
+      // Merge into the latest list so favorites added or removed while the
+      // network requests were running are preserved. Publish only once so the
+      // UI keeps the original all-at-once refresh behavior.
+      final current = List<LiveRoom>.from(SettingsService.to.fav.favoriteRooms.v);
+      final merged = current.map((room) => refreshedByKey[_roomKey(room)] ?? room).toList(growable: false);
+      SettingsService.to.fav.favoriteRooms.v = merged;
+      return true;
+    } finally {
+      _refreshStopwatch?.stop();
+      _refreshStopwatch = null;
+    }
+  }
+
+  String _roomKey(LiveRoom room) {
+    return '${room.platform?.toUpperCase() ?? ''}:${room.roomId ?? ''}';
   }
 }
