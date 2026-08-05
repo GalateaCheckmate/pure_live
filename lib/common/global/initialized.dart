@@ -40,7 +40,10 @@ class AppInitializer {
       CustomImageCacheManager.initialize(),
     ]);
 
-    InitialServices.init();
+    // Settings and the database are required by DesktopManager and MyApp.
+    // They must be ready before the first frame is rendered.
+    await InitialServices.initRequiredServices();
+
     _initSmartDialog();
     initRefresh();
 
@@ -58,6 +61,10 @@ class AppInitializer {
     }
 
     _isInitialized = true;
+
+    // Recording, FFmpeg and account services are not required for the first
+    // frame. Start them only after the required startup chain is complete.
+    InitialServices.scheduleDeferredServices();
   }
 
   String _getInstanceIdFromArgs(List<String> args) {

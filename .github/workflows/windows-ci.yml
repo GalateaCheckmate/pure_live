@@ -1,0 +1,82 @@
+name: Windows CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - "agent/**"
+    paths-ignore:
+      - "assets/releases.json"
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-windows:
+    name: Analyze, test and build Windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.38.3"
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Capture Windows baseline
+        shell: pwsh
+        run: |
+          ./tool/windows_baseline.ps1 `
+            -ReleaseDirectory "build/windows/x64/runner/Release" `
+            -ExecutablePath "build/windows/x64/runner/Release/pure_live.exe" `
+            -SkipLaunch `
+            -OutputPath "build/windows-baseline.json"
+
+          Get-Content "build/windows-baseline.json" | Out-File `
+            -FilePath $env:GITHUB_STEP_SUMMARY `
+            -Append `
+            -Encoding utf8
+
+      - name: Upload portable Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: pure-live-windows-${{ github.run_id }}
+          path: build/windows/x64/runner/Release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload baseline report
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-baseline-${{ github.run_id }}
+          path: build/windows-baseline.json
+          if-no-files-found: error
+          retention-days: 30
