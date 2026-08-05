@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/plugins/db_service.dart';
 import 'package:pure_live/modules/auth/auth_controller.dart';
@@ -11,6 +13,9 @@ import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:pure_live/recorder/pages/record_settings/record_settings_controller.dart';
 
 class InitialServices {
+  static bool _requiredServicesInitialized = false;
+  static bool _deferredServicesScheduled = false;
+
   static void initGlobalServices() {
     if (!Get.isRegistered<SettingsService>()) {
       Get.put(SettingsService(), permanent: true);
@@ -45,42 +50,44 @@ class InitialServices {
     Get.put<DbService>(db, permanent: true);
   }
 
-  static void initRecorderServices() {
-    FFmpegKitExtended.initialize();
-
-    if (!Get.isRegistered<CacheService>()) {
-      Get.put(CacheService(), permanent: true);
-    }
-    if (!Get.isRegistered<RecordSettingsController>()) {
-      Get.put(RecordSettingsController(), permanent: true);
-    }
-    if (!Get.isRegistered<StreamResolverService>()) {
-      Get.lazyPut(() => StreamResolverService(), fenix: true);
-    }
-    if (!Get.isRegistered<RecorderController>()) {
-      Get.put(RecorderController(), permanent: true);
-    }
-  }
-
-  static Future<void> init() async {
+  static Future<void> initRequiredServices() async {
+    if (_requiredServicesInitialized) return;
     await initDb();
     initGlobalServices();
     initLazyControllers();
-    initRecorderServices();
-    _initOptionalServices();
+    _requiredServicesInitialized = true;
   }
 
-  static void _initOptionalServices() {
-    // Auth does not block the local player. Initialize it asynchronously, but
-    // do not hide registration errors behind a fixed three-second delay.
+  static void scheduleDeferredServices() {
+    if (_deferredServicesScheduled) return;
+    _deferredServicesScheduled = true;
+
     Future.microtask(() {
       try {
+        FFmpegKitExtended.initialize();
+        if (!Get.isRegistered<CacheService>()) {
+          Get.put(CacheService(), permanent: true);
+        }
+        if (!Get.isRegistered<RecordSettingsController>()) {
+          Get.put(RecordSettingsController(), permanent: true);
+        }
+        if (!Get.isRegistered<StreamResolverService>()) {
+          Get.lazyPut(() => StreamResolverService(), fenix: true);
+        }
+        if (!Get.isRegistered<RecorderController>()) {
+          Get.put(RecorderController(), permanent: true);
+        }
         if (!Get.isRegistered<AuthController>()) {
           Get.put(AuthController(), permanent: true);
         }
-      } catch (e, stackTrace) {
-        debugPrint('AuthController initialization failed: $e\n$stackTrace');
+      } catch (error, stackTrace) {
+        debugPrint('Deferred service initialization failed: $error\n$stackTrace');
       }
     });
+  }
+
+  static Future<void> init() async {
+    await initRequiredServices();
+    scheduleDeferredServices();
   }
 }
