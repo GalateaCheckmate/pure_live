@@ -9,7 +9,6 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:stop_watch_timer/stop_watch_timer.dart';
 import 'package:pure_live/model/live_play_quality.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:pure_live/core/danmaku/huya_danmaku.dart';
 import 'package:pure_live/player/utils/player_consts.dart';
 import 'package:pure_live/modules/live_play/load_type.dart';
 import 'package:pure_live/core/danmaku/douyin_danmaku.dart';
