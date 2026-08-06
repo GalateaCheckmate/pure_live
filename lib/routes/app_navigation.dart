@@ -22,7 +22,7 @@ class AppNavigator {
     Get.toNamed(RoutePath.kAreaRooms, arguments: [site, category]);
   }
 
-  /// 跳转至直播间。同一次导航未结束时忽略重复点击，避免同时创建两个播放器页面。
+  /// 跳转至直播间。在当前直播页退出前忽略重复导航，避免同时创建多个播放器页面。
   static Future<void> toLiveRoomDetail({required LiveRoom liveRoom}) async {
     if (_openingLiveRoom) return;
     _openingLiveRoom = true;
