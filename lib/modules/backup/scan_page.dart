@@ -1,6 +1,5 @@
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/plugins/file_utils.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:pure_live/plugins/backup_recovery_service.dart';
 
 class ScanCodePage extends StatefulWidget {
@@ -11,114 +10,86 @@ class ScanCodePage extends StatefulWidget {
 }
 
 class _ScanCodePageState extends State<ScanCodePage> {
-  MobileScannerController cameraController = MobileScannerController(torchEnabled: true);
-  bool hasFound = false;
-  bool syncResult = false;
-  bool isSuccess = false;
+  final TextEditingController _urlController = TextEditingController();
+  bool _syncing = false;
+  bool? _syncResult;
+
+  @override
+  void dispose() {
+    _urlController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _sync() async {
+    final url = _urlController.text.trim();
+    if (!FileUtils.isHostUrl(url)) {
+      ToastUtil.show(i18n('sync_failed'));
+      return;
+    }
+
+    setState(() {
+      _syncing = true;
+      _syncResult = null;
+    });
+
+    final result = await BackupRecoveryService().pushSettingsToRemoteServer(url);
+    if (!mounted) return;
+
+    setState(() {
+      _syncing = false;
+      _syncResult = result;
+    });
+    ToastUtil.show(result ? i18n('sync_success') : i18n('sync_failed'));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(i18n("scan_qr_code")),
-        actions: [
-          hasFound
-              ? Container()
-              : IconButton(
-                  icon: ValueListenableBuilder(
-                    valueListenable: cameraController,
-                    builder: (context, state, child) {
-                      switch (state.torchState) {
-                        case TorchState.off:
-                          return const Icon(Icons.flash_off, color: Colors.grey);
-                        case TorchState.on:
-                          return const Icon(Icons.flash_on, color: Colors.yellow);
-                        case TorchState.auto:
-                          return IconButton(
-                            color: Colors.white,
-                            iconSize: 32.0,
-                            icon: const Icon(Icons.flash_auto),
-                            onPressed: () async {
-                              await cameraController.toggleTorch();
-                            },
-                          );
-                        case TorchState.unavailable:
-                          return const Icon(Icons.no_flash, color: Colors.grey);
-                      }
-                    },
+      appBar: AppBar(title: Text(i18n('scan_qr_code'))),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: _urlController,
+                  enabled: !_syncing,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'https://...',
                   ),
-                  iconSize: 20.0,
-                  onPressed: () => cameraController.toggleTorch(),
+                  onSubmitted: (_) => _sync(),
                 ),
-          hasFound
-              ? Container()
-              : IconButton(
-                  icon: ValueListenableBuilder(
-                    valueListenable: cameraController,
-                    builder: (context, state, child) {
-                      if (state.cameraDirection == CameraFacing.back) {
-                        return const Icon(Icons.camera_rear);
-                      } else {
-                        return const Icon(Icons.camera_front);
-                      }
-                    },
+                const SizedBox(height: 16),
+                if (_syncing)
+                  Column(
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 12),
+                      Text(i18n('syncing')),
+                    ],
+                  )
+                else
+                  FilledButton(
+                    onPressed: _sync,
+                    child: Text(i18n('tap_to_sync')),
                   ),
-                  iconSize: 20.0,
-                  onPressed: () => cameraController.switchCamera(),
-                ),
-        ],
-      ),
-      body: hasFound
-          ? Center(
-              child: syncResult
-                  ? Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        AppStatusView(type: AppStatusType.loading, title: "", subtitle: ""),
-                        SizedBox(height: 20),
-                        Text(i18n("syncing"), style: AppTextStyles.t16.copyWith(fontWeight: FontWeight.bold)),
-                      ],
-                    )
-                  : Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          isSuccess ? i18n("sync_success") : i18n("sync_failed"),
-                          style: AppTextStyles.t16.copyWith(fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 20),
-                        ElevatedButton(
-                          onPressed: () {
-                            setState(() {
-                              hasFound = false;
-                              syncResult = false;
-                              isSuccess = false;
-                            });
-                            cameraController = MobileScannerController();
-                          },
-                          child: Text(i18n("tap_to_sync")),
-                        ),
-                      ],
-                    ),
-            )
-          : MobileScanner(
-              // fit: BoxFit.contain,
-              controller: cameraController,
-              onDetect: (capture) async {
-                final List<Barcode> barcodes = capture.barcodes;
-                if (barcodes.isNotEmpty && FileUtils.isHostUrl(barcodes[0].rawValue!)) {
-                  setState(() {
-                    hasFound = true;
-                    syncResult = true;
-                  });
-                  final result = await BackupRecoveryService().pushSettingsToRemoteServer(barcodes[0].rawValue!);
-                  ToastUtil.show(result ? i18n("sync_success") : i18n("sync_failed"));
-                  setState(() {
-                    isSuccess = result;
-                    syncResult = false;
-                  });
-                }
-              },
+                if (_syncResult != null) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    _syncResult! ? i18n('sync_success') : i18n('sync_failed'),
+                    style: AppTextStyles.t16.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ],
             ),
+          ),
+        ),
+      ),
     );
   }
 }
