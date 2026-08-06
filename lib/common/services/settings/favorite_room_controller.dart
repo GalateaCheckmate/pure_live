@@ -17,6 +17,17 @@ class FavoriteRoomController extends GetxController {
     },
   );
 
+  final Rx<List<LiveArea>> favoriteAreas = hiveObject(
+    'favoriteAreas',
+    <LiveArea>[],
+    fromJson: (json) {
+      return List<LiveArea>.from((json['list'] ?? []).map((e) => LiveArea.fromJson(e)));
+    },
+    toJson: (list) {
+      return {'list': list.map((e) => e.toJson()).toList()};
+    },
+  );
+
   bool _isSameRoom(LiveRoom first, LiveRoom second) {
     return first.roomId == second.roomId &&
         first.platform?.toUpperCase() == second.platform?.toUpperCase();
