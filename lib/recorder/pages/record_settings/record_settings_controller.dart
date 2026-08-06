@@ -1,207 +1,234 @@
+import 'dart:async';
 import 'dart:io';
-import 'package:pure_live/common/index.dart';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:pure_live/common/index.dart';
 import 'package:pure_live/common/global/app_path_manager.dart';
 import 'package:pure_live/recorder/consts/recorder_config.dart';
+import 'package:pure_live/recorder/models/record_storage_snapshot.dart';
 import 'package:pure_live/recorder/services/cache_service.dart';
 
 class RecordSettingsController extends GetxController {
-  /// =====================================
-  /// 基础配置
-  /// =====================================
   final defaultQuality = RecorderConfig.defaultQuality.obs;
   final recordSavePath = RecorderConfig.recordSavePath.obs;
   final maxCacheMB = RecorderConfig.maxCacheMB.obs;
   final enableCacheLimit = RecorderConfig.enableCacheLimit.obs;
+
+  final temporaryFileSizeMB = 0.0.obs;
+  final recordedVideoSizeMB = 0.0.obs;
+  final cleanableSizeMB = 0.0.obs;
+  final cleanableBatchCount = 0.obs;
+  final protectedBatchCount = 0.obs;
+  final isStorageScanning = false.obs;
+  final isCleaning = false.obs;
+
+  /// 兼容旧界面调用：现在只代表临时文件大小。
   final cacheSizeMB = 0.0.obs;
 
-  /// =====================================
-  /// 录制性能与画质
-  /// =====================================
   final segmentTime = RecorderConfig.segmentTime.obs;
+  final maxMergeDurationSeconds =
+      RecorderConfig.maxMergeDurationSeconds.obs;
   final maxTaskCount = RecorderConfig.maxTaskCount.obs;
   final preferBestStream = RecorderConfig.preferBestStream.obs;
   final rwTimeout = RecorderConfig.rwTimeout.obs;
   final threadQueueSize = RecorderConfig.threadQueueSize.obs;
 
-  /// =====================================
-  /// 自动重连逻辑
-  /// =====================================
   final autoReconnect = RecorderConfig.autoReconnect.obs;
   final maxRetryCount = RecorderConfig.maxRetryCount.obs;
   final retryDelay = RecorderConfig.retryDelay.obs;
 
-  /// =====================================
-  /// 挂机检测轮询
-  /// =====================================
   final enablePolling = RecorderConfig.enablePolling.obs;
   final liveCheckInterval = RecorderConfig.liveCheckInterval.obs;
   final enableBackoff = RecorderConfig.enableBackoff.obs;
   final maxCheckInterval = RecorderConfig.maxCheckInterval.obs;
-
   final autoStartOnBoot = RecorderConfig.autoStartOnBoot.obs;
   final usePinyinForFolder = RecorderConfig.usePinyinForFolder.obs;
 
   @override
   void onInit() {
     super.onInit();
-    refreshCacheSize();
-    initRecordPath();
+    unawaited(_initialize());
   }
 
-  /// =====================================
-  /// 刷新缓存大小
-  /// =====================================
-  Future<void> refreshCacheSize() async {
-    cacheSizeMB.value = await CacheService.to.getCacheSize();
+  Future<void> _initialize() async {
+    await initRecordPath();
+    await refreshStorageStats(forceScan: true);
   }
 
-  /// =====================================
-  /// 更新缓存限制开关
-  /// =====================================
-  Future<void> updateEnableCacheLimit(bool v) async {
-    enableCacheLimit.value = v;
-    await RecorderConfig.setEnableCacheLimit(v);
-  }
+  Future<void> refreshStorageStats({bool forceScan = false}) async {
+    if (isStorageScanning.value) return;
+    isStorageScanning.value = true;
+    try {
+      final snapshot = await CacheService.to.getStorageSnapshot(
+        forceScan: forceScan,
+      );
+      temporaryFileSizeMB.value = snapshot.temporaryMB;
+      recordedVideoSizeMB.value = snapshot.recordedVideoMB;
+      cacheSizeMB.value = snapshot.temporaryMB;
 
-  /// =====================================
-  /// 清除缓存
-  /// =====================================
-  Future<void> clearCache() async {
-    await CacheService.to.clearAll();
-    await refreshCacheSize();
-  }
-
-  /// =====================================
-  /// 更新切片时长
-  /// =====================================
-  Future<void> updateSegmentTime(int v) async {
-    segmentTime.value = v;
-    await RecorderConfig.setSegmentTime(v);
-  }
-
-  /// =====================================
-  /// 更新最大任务数
-  /// =====================================
-  Future<void> updateMaxTask(int v) async {
-    maxTaskCount.value = v;
-    await RecorderConfig.setMaxTaskCount(v);
-  }
-
-  /// =====================================
-  /// 更新自动重连
-  /// =====================================
-  Future<void> updateAutoReconnect(bool v) async {
-    autoReconnect.value = v;
-    await RecorderConfig.setAutoReconnect(v);
-  }
-
-  /// =====================================
-  /// 更新最大重试次数
-  /// =====================================
-  Future<void> updateMaxRetryCount(int v) async {
-    maxRetryCount.value = v;
-    await RecorderConfig.setMaxRetryCount(v);
-  }
-
-  /// =====================================
-  /// 更新重试等待时间
-  /// =====================================
-  Future<void> updateRetryDelay(int v) async {
-    retryDelay.value = v;
-    await RecorderConfig.setRetryDelay(v);
-  }
-
-  /// =====================================
-  /// 更新开播检测间隔
-  /// =====================================
-  Future<void> updateLiveCheckInterval(int v) async {
-    liveCheckInterval.value = v;
-    await RecorderConfig.setLiveCheckInterval(v);
-  }
-
-  /// =====================================
-  /// 更新最大检测间隔
-  /// =====================================
-  Future<void> updateMaxCheckInterval(int v) async {
-    maxCheckInterval.value = v;
-    await RecorderConfig.setMaxCheckInterval(v);
-  }
-
-  /// =====================================
-  /// 更新挂机检测
-  /// =====================================
-  Future<void> updateEnablePolling(bool v) async {
-    enablePolling.value = v;
-    await RecorderConfig.setEnablePolling(v);
-  }
-
-  /// =====================================
-  /// 更新指数退避
-  /// =====================================
-  Future<void> updateEnableBackoff(bool v) async {
-    enableBackoff.value = v;
-    await RecorderConfig.setEnableBackoff(v);
-  }
-
-  /// =====================================
-  /// 选择录制目录
-  /// =====================================
-  Future<void> pickRecordDir() async {
-    final result = await FilePicker.getDirectoryPath();
-    if (result != null) {
-      recordSavePath.value = result;
-      await RecorderConfig.setRecordSavePath(result);
-      await refreshCacheSize();
+      final preview = await CacheService.to.getCleanupPreview(
+        forceScan: false,
+      );
+      _applyCleanupPreview(preview);
+    } finally {
+      isStorageScanning.value = false;
     }
   }
 
-  Future<void> updateDefaultQuality(String v) async {
-    defaultQuality.value = v;
-    await RecorderConfig.setDefaultQuality(v);
+  Future<void> refreshCacheSize() async {
+    await refreshStorageStats();
   }
 
-  Future<void> updateMaxCache(int v) async {
-    maxCacheMB.value = v;
-    await RecorderConfig.setMaxCacheMB(v);
+  Future<RecordCleanupPreview> prepareCleanupPreview() async {
+    isStorageScanning.value = true;
+    try {
+      final preview = await CacheService.to.getCleanupPreview(
+        forceScan: true,
+      );
+      _applyCleanupPreview(preview);
+      final snapshot = await CacheService.to.getStorageSnapshot();
+      temporaryFileSizeMB.value = snapshot.temporaryMB;
+      recordedVideoSizeMB.value = snapshot.recordedVideoMB;
+      cacheSizeMB.value = snapshot.temporaryMB;
+      return preview;
+    } finally {
+      isStorageScanning.value = false;
+    }
   }
 
-  Future<void> updatePreferBestStream(bool v) async {
-    preferBestStream.value = v;
-    await RecorderConfig.setPreferBestStream(v);
+  void _applyCleanupPreview(RecordCleanupPreview preview) {
+    cleanableSizeMB.value = preview.cleanableMB;
+    cleanableBatchCount.value = preview.cleanableBatchCount;
+    protectedBatchCount.value = preview.protectedBatchCount;
   }
 
-  /// =====================================
-  /// 更新读写超时
-  /// =====================================
-  Future<void> updateRwTimeout(int v) async {
-    rwTimeout.value = v;
-    await RecorderConfig.setRwTimeout(v);
+  Future<void> updateEnableCacheLimit(bool value) async {
+    enableCacheLimit.value = value;
+    await RecorderConfig.setEnableCacheLimit(value);
   }
 
-  /// =====================================
-  /// 更新缓冲队列大小
-  /// =====================================
-  Future<void> updateThreadQueueSize(int v) async {
-    threadQueueSize.value = v;
-    await RecorderConfig.setThreadQueueSize(v);
+  Future<int> clearCache() async {
+    if (isCleaning.value) return 0;
+    isCleaning.value = true;
+    try {
+      final deletedBytes = await CacheService.to.clearTemporaryFiles();
+      await refreshStorageStats(forceScan: true);
+      return deletedBytes;
+    } finally {
+      isCleaning.value = false;
+    }
   }
 
-  Future<void> updateAutoStartOnBoot(bool v) async {
-    autoStartOnBoot.value = v;
-    await RecorderConfig.setAutoStartOnBoot(v);
+  Future<void> updateSegmentTime(int value) async {
+    final normalized = value.clamp(60, 3600).toInt();
+    segmentTime.value = normalized;
+    await RecorderConfig.setSegmentTime(normalized);
+
+    final mergeLimit = maxMergeDurationSeconds.value;
+    if (mergeLimit > 0 && mergeLimit < normalized) {
+      await updateMaxMergeDurationSeconds(normalized);
+    }
   }
 
-  Future<void> updateUsePinyinForFolder(bool v) async {
-    usePinyinForFolder.value = v;
-    await RecorderConfig.setUsePinyinForFolder(v);
+  Future<void> updateMaxMergeDurationSeconds(int value) async {
+    final normalized = value <= 0
+        ? 0
+        : value.clamp(segmentTime.value, 24 * 3600).toInt();
+    maxMergeDurationSeconds.value = normalized;
+    await RecorderConfig.setMaxMergeDurationSeconds(normalized);
+  }
+
+  Future<void> updateMaxTask(int value) async {
+    maxTaskCount.value = value;
+    await RecorderConfig.setMaxTaskCount(value);
+  }
+
+  Future<void> updateAutoReconnect(bool value) async {
+    autoReconnect.value = value;
+    await RecorderConfig.setAutoReconnect(value);
+  }
+
+  Future<void> updateMaxRetryCount(int value) async {
+    maxRetryCount.value = value;
+    await RecorderConfig.setMaxRetryCount(value);
+  }
+
+  Future<void> updateRetryDelay(int value) async {
+    retryDelay.value = value;
+    await RecorderConfig.setRetryDelay(value);
+  }
+
+  Future<void> updateLiveCheckInterval(int value) async {
+    liveCheckInterval.value = value;
+    await RecorderConfig.setLiveCheckInterval(value);
+  }
+
+  Future<void> updateMaxCheckInterval(int value) async {
+    maxCheckInterval.value = value;
+    await RecorderConfig.setMaxCheckInterval(value);
+  }
+
+  Future<void> updateEnablePolling(bool value) async {
+    enablePolling.value = value;
+    await RecorderConfig.setEnablePolling(value);
+  }
+
+  Future<void> updateEnableBackoff(bool value) async {
+    enableBackoff.value = value;
+    await RecorderConfig.setEnableBackoff(value);
+  }
+
+  Future<void> pickRecordDir() async {
+    final result = await FilePicker.getDirectoryPath();
+    if (result == null) return;
+
+    recordSavePath.value = result;
+    await RecorderConfig.setRecordSavePath(result);
+    CacheService.to.invalidateStorageIndex();
+    await refreshStorageStats(forceScan: true);
+  }
+
+  Future<void> updateDefaultQuality(String value) async {
+    defaultQuality.value = value;
+    await RecorderConfig.setDefaultQuality(value);
+  }
+
+  Future<void> updateMaxCache(int value) async {
+    maxCacheMB.value = value;
+    await RecorderConfig.setMaxCacheMB(value);
+  }
+
+  Future<void> updatePreferBestStream(bool value) async {
+    preferBestStream.value = value;
+    await RecorderConfig.setPreferBestStream(value);
+  }
+
+  Future<void> updateRwTimeout(int value) async {
+    rwTimeout.value = value;
+    await RecorderConfig.setRwTimeout(value);
+  }
+
+  Future<void> updateThreadQueueSize(int value) async {
+    threadQueueSize.value = value;
+    await RecorderConfig.setThreadQueueSize(value);
+  }
+
+  Future<void> updateAutoStartOnBoot(bool value) async {
+    autoStartOnBoot.value = value;
+    await RecorderConfig.setAutoStartOnBoot(value);
+  }
+
+  Future<void> updateUsePinyinForFolder(bool value) async {
+    usePinyinForFolder.value = value;
+    await RecorderConfig.setUsePinyinForFolder(value);
   }
 
   Future<void> initRecordPath() async {
-    if (recordSavePath.isEmpty) {
-      final Directory recordDir = await AppPathManager().getDir(AppPathManager.dirRecords);
-      recordSavePath.value = recordDir.path;
-      await RecorderConfig.setRecordSavePath(recordDir.path);
-    }
+    if (recordSavePath.value.isNotEmpty) return;
+    final Directory recordDir =
+        await AppPathManager().getDir(AppPathManager.dirRecords);
+    recordSavePath.value = recordDir.path;
+    await RecorderConfig.setRecordSavePath(recordDir.path);
+    CacheService.to.invalidateStorageIndex();
   }
 }
