@@ -224,7 +224,7 @@ class VideoProcessorService extends GetxService {
       directory.path,
       _formatOutputName(timeRange.start, timeRange.end),
     );
-    final partialPath = '$finalPath.partial.mp4';
+    final partialPath = p.setExtension(finalPath, '.partial.mp4');
 
     final ffmpegTaskId = _safeFilePart(
       'merge_${taskId}_${batchId}_$groupId',
@@ -380,6 +380,9 @@ class VideoProcessorService extends GetxService {
       var split = false;
       if (current.isNotEmpty) {
         final previous = current.last;
+        final hasSessionBoundary = previous.sessionIndex != null &&
+            file.sessionIndex != null &&
+            file.sessionIndex != previous.sessionIndex;
         final hasIndexGap = previous.sessionIndex != null &&
             file.sessionIndex == previous.sessionIndex &&
             previous.segmentIndex != null &&
@@ -387,7 +390,7 @@ class VideoProcessorService extends GetxService {
         final hasTimeGap =
             file.modified.difference(previous.modified) > gapTolerance;
         final reachedLimit = maxSegments > 0 && current.length >= maxSegments;
-        split = hasIndexGap || hasTimeGap || reachedLimit;
+        split = hasSessionBoundary || hasIndexGap || hasTimeGap || reachedLimit;
       }
 
       if (split) {
@@ -450,7 +453,8 @@ class VideoProcessorService extends GetxService {
     final extension = p.extension(fileName);
     var candidate = p.join(directory, fileName);
     var suffix = 2;
-    while (File(candidate).existsSync() || File('$candidate.partial.mp4').existsSync()) {
+    while (File(candidate).existsSync() ||
+        File(p.setExtension(candidate, '.partial.mp4')).existsSync()) {
       candidate = p.join(
         directory,
         '${baseName}_${suffix.toString().padLeft(2, '0')}$extension',
@@ -511,7 +515,8 @@ class _SegmentFile {
       caseSensitive: false,
     ).firstMatch(name);
     final timestamp = RegExp(
-      r'(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})',
+      r'^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.ts$',
+      caseSensitive: false,
     ).firstMatch(name);
 
     DateTime? parsedTimestamp;
