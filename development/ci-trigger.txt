@@ -1,0 +1,2 @@
+Windows CI trigger for master after Windows-only cleanup.
+Triggered at 2026-08-06T11:45:00+08:00.
