@@ -2,17 +2,27 @@ from pathlib import Path
 import re
 
 
-def load(path: str) -> tuple[str, str]:
-    raw = Path(path).read_text(encoding="utf-8", newline="")
+def load(path: str):
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        raw = handle.read()
     newline = "\r\n" if "\r\n" in raw else "\n"
     return raw.replace("\r\n", "\n"), newline
 
 
-def save(path: str, text: str, newline: str) -> None:
-    Path(path).write_text(text.replace("\n", newline), encoding="utf-8", newline="")
+def save(path: str, text: str, newline: str):
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        handle.write(text.replace("\n", newline))
 
 
-def replace_once(path: str, old: str, new: str) -> None:
+def regex_once(path: str, pattern: str, replacement: str):
+    text, newline = load(path)
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+    if count != 1:
+        raise RuntimeError(f"{path}: expected one match, found {count}")
+    save(path, updated, newline)
+
+
+def replace_once(path: str, old: str, new: str):
     text, newline = load(path)
     count = text.count(old)
     if count != 1:
@@ -20,383 +30,8 @@ def replace_once(path: str, old: str, new: str) -> None:
     save(path, text.replace(old, new, 1), newline)
 
 
-def replace_count(path: str, old: str, new: str, expected: int) -> None:
-    text, newline = load(path)
-    count = text.count(old)
-    if count != expected:
-        raise RuntimeError(f"{path}: expected {expected} exact matches, found {count}")
-    save(path, text.replace(old, new), newline)
-
-
-def regex_once(path: str, pattern: str, replacement: str) -> None:
-    text, newline = load(path)
-    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
-    if count != 1:
-        raise RuntimeError(f"{path}: expected one regex match, found {count}")
-    save(path, updated, newline)
-
-
-favorite_page = """import 'package:remixicon/remixicon.dart';
-import 'package:pure_live/common/index.dart';
-import 'package:pure_live/modules/favorite/room_grid_view.dart';
-import 'package:pure_live/common/widgets/common_appbar_actions.dart';
-
-class FavoritePage extends GetView<FavoriteController> {
-  const FavoritePage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraint) {
-        return Obx(() {
-          final bool showAction = Get.width <= 680;
-          final int menuCount = SettingsService.to.app.savedMenuIds.v.length;
-          final List<Site> availableSitesList = Sites().availableSites(containsAll: true);
-
-          return Scaffold(
-            appBar: AppBar(
-              centerTitle: true,
-              leading: (showAction || menuCount <= 1) ? const MenuButton() : null,
-              actions: showAction ? [CommonAppBarActions()] : null,
-              title: TabBar(
-                controller: controller.tabController,
-                isScrollable: true,
-                tabs: [
-                  Tab(text: i18n("online_room_title")),
-                  Tab(text: i18n("recording_room_title")),
-                  Tab(text: i18n("offline_room_title")),
-                ],
-              ),
-            ),
-            body: _FavoriteSiteTabs(
-              controller: controller,
-              availableSitesList: availableSitesList,
-            ),
-          );
-        });
-      },
-    );
-  }
-}
-
-class _FavoriteSiteTabs extends StatefulWidget {
-  const _FavoriteSiteTabs({required this.controller, required this.availableSitesList});
-
-  final FavoriteController controller;
-  final List<Site> availableSitesList;
-
-  @override
-  State<_FavoriteSiteTabs> createState() => _FavoriteSiteTabsState();
-}
-
-class _FavoriteSiteTabsState extends State<_FavoriteSiteTabs> with SingleTickerProviderStateMixin {
-  late TabController _siteTabController;
-
-  @override
-  void initState() {
-    super.initState();
-    _createSiteTabController();
-  }
-
-  @override
-  void didUpdateWidget(covariant _FavoriteSiteTabs oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final oldSiteIds = oldWidget.availableSitesList.map((site) => site.id).join('|');
-    final newSiteIds = widget.availableSitesList.map((site) => site.id).join('|');
-    if (oldSiteIds != newSiteIds) {
-      _siteTabController.removeListener(_handleSiteTabChanged);
-      _siteTabController.dispose();
-      _createSiteTabController();
-    }
-  }
-
-  void _createSiteTabController() {
-    final int selectedIndex = widget.controller.tabSiteIndex.value;
-    final int initialIndex = selectedIndex >= 0 && selectedIndex < widget.availableSitesList.length ? selectedIndex : 0;
-    _siteTabController = TabController(
-      length: widget.availableSitesList.length,
-      initialIndex: initialIndex,
-      vsync: this,
-    );
-    _siteTabController.addListener(_handleSiteTabChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        widget.controller.changeSite(_siteTabController.index);
-      }
-    });
-  }
-
-  void _handleSiteTabChanged() {
-    if (_siteTabController.indexIsChanging) return;
-    widget.controller.changeSite(_siteTabController.index);
-  }
-
-  @override
-  void dispose() {
-    _siteTabController.removeListener(_handleSiteTabChanged);
-    _siteTabController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        TabBar(
-          controller: _siteTabController,
-          isScrollable: true,
-          tabs: widget.availableSitesList.map((site) => Tab(text: site.name)).toList(),
-        ),
-        Expanded(
-          child: BasePageView<FavoriteController, LiveRoom>(
-            controller: widget.controller,
-            enableRefresh: true,
-            enableLoadMore: true,
-            emptyBuilder: (context) => AppStatusView(
-              type: AppStatusType.empty,
-              icon: Remix.heart_3_fill,
-              title: i18n("empty_favorite_online_title"),
-              subtitle: i18n("empty_favorite_online_subtitle"),
-            ),
-            showScrollToTopBtn: SettingsService.to.page.showScrollToTopBtn.v,
-            showPageSizeSelector: SettingsService.to.page.showPageSizeSelector.v,
-            pageSizeOptions: SettingsService.to.page.pageSizeOptions,
-            contentBuilder: (context, list, scrollController) {
-              return TabBarView(
-                controller: _siteTabController,
-                children: widget.availableSitesList.map((site) {
-                  return RoomGridView(
-                    site: site.id,
-                    isOnline: widget.controller.tabOnlineIndex.value != 1,
-                    scrollController: scrollController,
-                    displayList: list,
-                  );
-                }).toList(),
-              );
-            },
-          ),
-        ),
-      ],
-    );
-  }
-}
-"""
-_, favorite_newline = load("lib/modules/favorite/favorite_page.dart")
-save("lib/modules/favorite/favorite_page.dart", favorite_page, favorite_newline)
-
-controller_path = "lib/modules/favorite/favorite_controller.dart"
-replace_once(
-    controller_path,
-    "  int _refreshGeneration = 0;\n",
-    "  int _refreshGeneration = 0;\n  final List<Worker> _workers = <Worker>[];\n",
-)
-replace_once(
-    controller_path,
-    """    debounce(SettingsService.to.fav.favoriteRooms, (_) => applyLocalFilter(), time: const Duration(milliseconds: 1000));
-
-    ever(selectedTagId, (_) => applyLocalFilter());
-    ever(tabSiteIndex, (_) => applyLocalFilter());
-    ever(tabOnlineIndex, (_) => applyLocalFilter());
-    ever(tagController.tags, (_) => applyLocalFilter());
-    ever(tagController.roomTagsMap, (_) => applyLocalFilter());
-""",
-    """    _workers.addAll([
-      ever(SettingsService.to.fav.favoriteRooms, (_) => applyLocalFilter()),
-      ever(tagController.tags, (_) => applyLocalFilter()),
-      ever(tagController.roomTagsMap, (_) => applyLocalFilter()),
-    ]);
-""",
-)
-replace_once(
-    controller_path,
-    """    _refreshGeneration++;
-    tabController.dispose();
-""",
-    """    _refreshGeneration++;
-    for (final worker in _workers) {
-      worker.dispose();
-    }
-    _workers.clear();
-    tabController.dispose();
-""",
-)
-replace_once(
-    controller_path,
-    """  void changeSelectedTag(String tagId) {
-    selectedTagId.value = tagId;
-    if (Get.width > 680) {
-      currentPage = 1;
-    }
-    applyLocalFilter();
-  }
-
-  void updateRoomTags(LiveRoom room, List<String> newTagIds) {
-    tagController.setRoomTags(room.roomId.toString(), newTagIds);
-    applyLocalFilter();
-  }
-""",
-    """  void changeSelectedTag(String tagId) {
-    if (selectedTagId.value == tagId) return;
-    selectedTagId.value = tagId;
-    if (Get.width > 680) {
-      currentPage = 1;
-    }
-    applyLocalFilter();
-  }
-
-  void changeSite(int siteIndex) {
-    final availableSites = Sites().availableSites(containsAll: true);
-    if (siteIndex < 0 || siteIndex >= availableSites.length) return;
-
-    final bool siteChanged = tabSiteIndex.value != siteIndex;
-    final bool tagChanged = selectedTagId.value != TagManagementController.allTagKey;
-    if (!siteChanged && !tagChanged) return;
-
-    selectedTagId.value = TagManagementController.allTagKey;
-    tabSiteIndex.value = siteIndex;
-    if (Get.width > 680) {
-      currentPage = 1;
-    }
-    applyLocalFilter();
-  }
-
-  void updateRoomTags(LiveRoom room, List<String> newTagIds) {
-    tagController.setRoomTags(room, newTagIds);
-  }
-""",
-)
-replace_count(
-    controller_path,
-    """      if (applied && generation == _refreshGeneration) {
-        applyLocalFilter();
-        EventBus.instance.emit('refresh_favorite_finish', true);
-      }
-""",
-    """      if (applied && generation == _refreshGeneration) {
-        EventBus.instance.emit('refresh_favorite_finish', true);
-      }
-""",
-    2,
-)
-
-tag_path = "lib/modules/tags/tag_management_controller.dart"
 regex_once(
-    tag_path,
-    r"  void setRoomTags\(String roomId, List<String> newTagIds\) \{.*?\n  \}\n\n  void _loadRoomTagsMapping",
-    """  void setRoomTags(LiveRoom room, List<String> newTagIds) {
-    final String key = _roomKey(room);
-    final String legacyKey = room.roomId.toString();
-
-    if (newTagIds.isEmpty) {
-      if (roomTagsMap.containsKey(legacyKey)) {
-        roomTagsMap[key] = <String>[];
-      } else {
-        roomTagsMap.remove(key);
-      }
-    } else {
-      roomTagsMap[key] = List<String>.from(newTagIds);
-    }
-
-    roomTagsMap.refresh();
-    saveRoomTagsMapping();
-  }
-
-  void _loadRoomTagsMapping""",
-)
-replace_once(
-    tag_path,
-    """  List<String> getTagsForRoom(LiveRoom room) {
-    final String roomId = room.roomId.toString();
-    return roomTagsMap[roomId] ?? [];
-  }
-""",
-    """  List<String> getTagsForRoom(LiveRoom room) {
-    final String key = _roomKey(room);
-    if (roomTagsMap.containsKey(key)) {
-      return roomTagsMap[key] ?? <String>[];
-    }
-    return roomTagsMap[room.roomId.toString()] ?? <String>[];
-  }
-
-  String _roomKey(LiveRoom room) {
-    return '${room.platform?.toUpperCase() ?? ''}:${room.roomId ?? ''}';
-  }
-""",
-)
-
-home_path = "lib/modules/home/home_page.dart"
-replace_once(
-    home_path,
-    """  Timer? _debounceTimer;
-  final FavoriteController favoriteController = Get.find<FavoriteController>();
-""",
-    """  Timer? _debounceTimer;
-  Worker? _tabBottomWorker;
-  Worker? _savedMenuWorker;
-  final FavoriteController favoriteController = Get.find<FavoriteController>();
-""",
-)
-replace_once(
-    home_path,
-    """    favoriteController.tabBottomIndex.addListener(() {
-      if (mounted) {
-        setState(() => _selectedIndex = favoriteController.tabBottomIndex.value);
-      }
-    });
-
-    ever(SettingsService.to.app.savedMenuIds, (v) {
-      if (mounted) {
-        final List<String> value = List<String>.from(v as List);
-        if (value.isNotEmpty) {
-          final currentMenuId = HomeMenu.values[_selectedIndex].id;
-          if (!value.contains(currentMenuId)) {
-            final firstMenu = HomeMenu.fromId(value.first);
-            if (firstMenu != null) {
-              onDestinationSelected(firstMenu.index);
-            }
-          }
-        }
-      }
-    });
-""",
-    """    _tabBottomWorker = ever(favoriteController.tabBottomIndex, (index) {
-      if (mounted) {
-        setState(() => _selectedIndex = index);
-      }
-    });
-
-    _savedMenuWorker = ever(SettingsService.to.app.savedMenuIds, (value) {
-      if (mounted && value.isNotEmpty) {
-        final currentMenuId = HomeMenu.values[_selectedIndex].id;
-        if (!value.contains(currentMenuId)) {
-          final firstMenu = HomeMenu.fromId(value.first);
-          if (firstMenu != null) {
-            onDestinationSelected(firstMenu.index);
-          }
-        }
-      }
-    });
-""",
-)
-replace_once(
-    home_path,
-    """  void dispose() {
-    _debounceTimer?.cancel();
-    super.dispose();
-  }
-""",
-    """  void dispose() {
-    _debounceTimer?.cancel();
-    _tabBottomWorker?.dispose();
-    _savedMenuWorker?.dispose();
-    super.dispose();
-  }
-""",
-)
-
-room_card_path = "lib/common/widgets/room_card.dart"
-regex_once(
-    room_card_path,
+    "lib/common/widgets/room_card.dart",
     r"class _FollowButtonState extends State<FollowButton> \{.*?\n\}\n\nclass CountChip",
     """class _FollowButtonState extends State<FollowButton> {
   late bool isFavorite = SettingsService.to.fav.isFavorite(widget.room);
@@ -424,7 +59,10 @@ regex_once(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       ),
-      child: Text(isFavorite ? i18n("unfollow") : i18n("follow"), style: const TextStyle(fontWeight: FontWeight.w600)),
+      child: Text(
+        isFavorite ? i18n("unfollow") : i18n("follow"),
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
     );
   }
 }
@@ -432,9 +70,8 @@ regex_once(
 class CountChip""",
 )
 
-live_path = "lib/modules/live_play/live_play_page.dart"
 regex_once(
-    live_path,
+    "lib/modules/live_play/live_play_page.dart",
     r"class FavoriteFloatingButton extends StatefulWidget \{.*?\n\}\n\nclass NotLivingVideoWidget",
     """class FavoriteFloatingButton extends StatefulWidget {
   const FavoriteFloatingButton({super.key, required this.room});
@@ -475,7 +112,7 @@ class _FavoriteFloatingButtonState extends State<FavoriteFloatingButton> {
   }
 
   Future<void> _unfollow() async {
-    final confirmed = await Get.dialog<bool>(
+    final bool? confirmed = await Get.dialog<bool>(
       AlertDialog(
         title: Text(i18n("unfollow")),
         content: Text(
@@ -536,9 +173,8 @@ class _FavoriteFloatingButtonState extends State<FavoriteFloatingButton> {
 class NotLivingVideoWidget""",
 )
 
-windows_ci = ".github/workflows/windows-ci.yml"
 replace_once(
-    windows_ci,
+    ".github/workflows/windows-ci.yml",
     "on:\n  workflow_dispatch:\n",
     """on:
   workflow_dispatch:
@@ -548,5 +184,9 @@ replace_once(
 """,
 )
 
-Path(".github/workflows/apply-favorite-audit-fix.yml").unlink()
-Path("tool/apply_favorite_audit_fix.py").unlink()
+for path in (
+    ".github/workflows/apply-favorite-audit-fix.yml",
+    "tool/apply_favorite_audit_fix.py",
+    "tool/run_favorite_audit_fix.py",
+):
+    Path(path).unlink(missing_ok=True)
