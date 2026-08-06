@@ -10,6 +10,7 @@ class TagManagementController extends GetxController {
   static const Map<String, String> allTag = {'all': '全部'};
   static String get allTagKey => allTag.keys.first;
   static String get allTagLabel => allTag.values.first;
+
   @override
   void onInit() {
     super.onInit();
@@ -36,11 +37,20 @@ class TagManagementController extends GetxController {
     await HivePrefUtil.setAnyPref(_roomTagsMappingKey, roomTagsMap);
   }
 
-  void setRoomTags(String roomId, List<String> newTagIds) {
+  void setRoomTags(LiveRoom room, List<String> newTagIds) {
+    final String key = _roomKey(room);
+    final String legacyKey = room.roomId.toString();
+
     if (newTagIds.isEmpty) {
-      roomTagsMap.remove(roomId);
+      if (roomTagsMap.containsKey(legacyKey)) {
+        // Keep an empty canonical value so a cleared room does not fall back
+        // to an old roomId-only mapping shared by another platform.
+        roomTagsMap[key] = <String>[];
+      } else {
+        roomTagsMap.remove(key);
+      }
     } else {
-      roomTagsMap[roomId] = newTagIds;
+      roomTagsMap[key] = List<String>.from(newTagIds);
     }
 
     roomTagsMap.refresh();
@@ -59,8 +69,15 @@ class TagManagementController extends GetxController {
   }
 
   List<String> getTagsForRoom(LiveRoom room) {
-    final String roomId = room.roomId.toString();
-    return roomTagsMap[roomId] ?? [];
+    final String key = _roomKey(room);
+    if (roomTagsMap.containsKey(key)) {
+      return roomTagsMap[key] ?? <String>[];
+    }
+    return roomTagsMap[room.roomId.toString()] ?? <String>[];
+  }
+
+  String _roomKey(LiveRoom room) {
+    return '${room.platform?.toUpperCase() ?? ''}:${room.roomId ?? ''}';
   }
 
   bool addTag(String name, String description) {
