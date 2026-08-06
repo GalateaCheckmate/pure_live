@@ -15,7 +15,6 @@ import 'package:pure_live/modules/live_play/load_type.dart';
 import 'package:pure_live/core/danmaku/douyin_danmaku.dart';
 import 'package:pure_live/core/interface/live_danmaku.dart';
 import 'package:pure_live/modules/live_play/player_state.dart';
-import 'package:back_button_interceptor/back_button_interceptor.dart';
 import 'package:pure_live/modules/live_play/widgets/danmaku_list_view.dart';
 import 'package:pure_live/recorder/pages/recorder/recorder_controller.dart';
 
@@ -96,7 +95,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   Future<void> _initCore() async {
     _initState();
     _initTab();
-    _initBackInterceptor();
     _initDebounce();
     _initTimer();
     await _preloadEmoji();
@@ -117,12 +115,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
   void _initTab() {
     tabController = TabController(length: tabs.length, vsync: this);
-  }
-
-  void _initBackInterceptor() {
-    if (Platform.isAndroid) {
-      BackButtonInterceptor.add(myInterceptor, zIndex: 1, name: "live_play_page");
-    }
   }
 
   void _initPlayer() {
@@ -171,23 +163,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     return !liveDanmaku.isConnected;
   }
 
-  bool myInterceptor(bool stopDefaultButtonEvent, RouteInfo info) {
-    if (isMenuOpen) {
-      Navigator.of(Get.context!).pop();
-      isMenuOpen = false;
-      return true;
-    }
-    if (GlobalPlayerState.to.isFullscreen.value) {
-      setNormalScreen();
-      videoController.value?.exitFullScreen();
-      return true;
-    }
-
-    videoController.value?.clearListener();
-    success.value = false;
-    return false;
-  }
-
   @override
   void onClose() {
     _closed = true;
@@ -203,9 +178,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     _stopWatchSubscription = null;
     _stopWatchTimer.onStopTimer();
     tabController.dispose();
-    if (Platform.isAndroid) {
-      BackButtonInterceptor.removeByName("live_play_page");
-    }
     if (_danmakuInitialized) {
       liveDanmaku.stop();
       _danmakuInitialized = false;
@@ -218,9 +190,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   void setWidescreen() => screenMode.value = VideoMode.widescreen;
   void setFullScreen() => screenMode.value = VideoMode.fullscreen;
 
-  // =========================================================
-  // 初始化播放
-  // =========================================================
   Future<LiveRoom> onInitPlayerState({
     ReloadDataType reloadDataType = ReloadDataType.refreash,
     int line = 0,
@@ -343,7 +312,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     );
   }
 
-  // ================= IPTV =================
   Future<void> _initIptvPlayer(int generation) async {
     final link = detail.value?.link;
     log('IPTV link: $link');
@@ -380,9 +348,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     currentQuality.value = 0;
   }
 
-  // =========================================================
-  // 弹幕
-  // =========================================================
   void initDanmau() {
     if (!_hasRoom || !_danmakuInitialized) return;
     if (!SettingsService.to.danmaku.enableDanmakuDisplay.v) {
@@ -427,9 +392,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     messages.add(msg);
   }
 
-  // =========================================================
-  // 设置播放器
-  // =========================================================
   Future<void> setPlayer({int? generation}) async {
     if (generation != null && !_isLoadActive(generation)) return;
     final currentRoom = detail.value;
@@ -443,32 +405,32 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
     if (currentSite.id == Sites.bilibiliSite) {
       headers = {
-        "cookie": SettingsService.to.cookieManager.bilibiliCookie.v,
-        "authority": "api.bilibili.com",
-        "accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "accept-language": "zh-CN,zh;q=0.9",
-        "cache-control": "no-cache",
-        "dnt": "1",
-        "pragma": "no-cache",
-        "sec-ch-ua": '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-fetch-dest": "document",
-        "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "none",
-        "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1",
-        "user-agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-        "referer": "https://live.bilibili.com",
+        'cookie': SettingsService.to.cookieManager.bilibiliCookie.v,
+        'authority': 'api.bilibili.com',
+        'accept':
+            'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-language': 'zh-CN,zh;q=0.9',
+        'cache-control': 'no-cache',
+        'dnt': '1',
+        'pragma': 'no-cache',
+        'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'document',
+        'sec-fetch-mode': 'navigate',
+        'sec-fetch-site': 'none',
+        'sec-fetch-user': '?1',
+        'upgrade-insecure-requests': '1',
+        'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'referer': 'https://live.bilibili.com',
       };
     } else if (currentSite.id == Sites.huyaSite) {
       final ua = await HuyaSite().getHuYaUA();
       if (generation != null && !_isLoadActive(generation)) return;
-      headers = {"user-agent": ua, "origin": "https://www.huya.com"};
+      headers = {'user-agent': ua, 'origin': 'https://www.huya.com'};
     } else if (currentSite.id == Sites.iptvSite && SettingsService.to.iptv.customIptvUserAgent.v.isNotEmpty) {
-      headers = {"user-agent": SettingsService.to.iptv.customIptvUserAgent.v};
+      headers = {'user-agent': SettingsService.to.iptv.customIptvUserAgent.v};
     }
 
     await videoController.value?.destory();
@@ -492,9 +454,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     success.value = true;
   }
 
-  // =========================================================
-  // 切换清晰度
-  // =========================================================
   Future<void> setResolution(ReloadDataType reloadDataType, int qualityIndex, int lineIndex) async {
     _loadGeneration++;
     await GlobalPlayerService.instance.playerManager.close();
@@ -507,9 +466,6 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     await onInitPlayerState(reloadDataType: reloadDataType, line: currentLineIndex.value, isReCalculate: false);
   }
 
-  // =========================================================
-  // 清晰度
-  // =========================================================
   Future<void> getPlayQualites({int? generation}) async {
     try {
       final currentRoom = detail.value;
@@ -594,46 +550,28 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     await onInitPlayerState(reloadDataType: ReloadDataType.refreash);
   }
 
-  // =========================================================
-  // 打开外部APP
-  // =========================================================
   Future<void> openNaviteAPP() async {
-    var naviteUrl = "";
-    var webUrl = "";
+    var webUrl = '';
     if (site == Sites.bilibiliSite) {
-      naviteUrl = "bilibili://live/${detail.value?.roomId}";
-      webUrl = "https://live.bilibili.com/${detail.value?.roomId}";
+      webUrl = 'https://live.bilibili.com/${detail.value?.roomId}';
     } else if (site == Sites.douyinSite) {
-      var args = detail.value?.danmakuData as DouyinDanmakuArgs;
-      naviteUrl = "snssdk1128://webcast_room?room_id=${args.roomId}";
-      webUrl = "https://live.douyin.com/${args.webRid}";
+      final args = detail.value?.danmakuData as DouyinDanmakuArgs;
+      webUrl = 'https://live.douyin.com/${args.webRid}';
     } else if (site == Sites.huyaSite) {
-      var args = detail.value?.danmakuData as HuyaDanmakuArgs;
-      naviteUrl =
-          "yykiwi://homepage/index.html?banneraction=https%3A%2F%2Fdiy-front.cdn.huya.com%2Fzt%2Ffrontpage%2Fcc%2Fupdate.html%3Fhyaction%3Dlive%26channelid%3D${args.subSid}%26subid%3D${args.subSid}%26liveuid%3D${args.subSid}%26screentype%3D1%26sourcetype%3D0%26fromapp%3Dhuya_wap%252Fclick%252Fopen_app_guide%26&fromapp=huya_wap/click/open_app_guide";
-      webUrl = "https://www.huya.com/${detail.value?.roomId}";
+      webUrl = 'https://www.huya.com/${detail.value?.roomId}';
     } else if (site == Sites.douyuSite) {
-      naviteUrl =
-          "douyulink://?type=90001&schemeUrl=douyuapp%3A%2F%2Froom%3FliveType%3D0%26rid%3D${detail.value?.roomId}";
-      webUrl = "https://www.douyu.com/${detail.value?.roomId}";
+      webUrl = 'https://www.douyu.com/${detail.value?.roomId}';
     } else if (site == Sites.ccSite) {
-      log(detail.value!.userId.toString(), name: "cc_user_id");
-      naviteUrl = "cc://join-room/${detail.value?.roomId}/${detail.value?.userId}/";
-      webUrl = "https://cc.163.com/${detail.value?.roomId}";
+      webUrl = 'https://cc.163.com/${detail.value?.roomId}';
     } else if (site == Sites.kuaishouSite) {
-      naviteUrl =
-          "kwai://liveaggregatesquare?liveStreamId=${detail.value?.link}&recoStreamId=${detail.value?.link}&recoLiveStreamId=${detail.value?.link}&liveSquareSource=28&path=/rest/n/live/feed/sharePage/slide/more&mt_product=H5_OUTSIDE_CLIENT_SHARE";
-      webUrl = "https://live.kuaishou.com/u/${detail.value?.roomId}";
+      webUrl = 'https://live.kuaishou.com/u/${detail.value?.roomId}';
     }
+
+    if (webUrl.isEmpty) return;
     try {
-      if (Platform.isAndroid) {
-        await launchUrlString(naviteUrl, mode: LaunchMode.externalApplication);
-      } else {
-        await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
-      }
+      await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
     } catch (_) {
       ToastUtil.show(i18n('open_app_failed_fallback_browser'));
-      await launchUrlString(webUrl, mode: LaunchMode.externalApplication);
     }
   }
 
