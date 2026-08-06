@@ -65,6 +65,35 @@ class BiliBiliDanmaku implements LiveDanmaku {
 
   WebScoketUtils? webScoketUtils;
   late BiliBiliDanmakuArgs danmakuArgs;
+
+  static Future<int?> fetchAudienceCount(
+    BiliBiliDanmakuArgs args, {
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    final danmaku = BiliBiliDanmaku();
+    final completer = Completer<int?>();
+
+    danmaku.onMessage = (message) {
+      if (completer.isCompleted || message.type != LiveMessageType.online) {
+        return;
+      }
+      final count = int.tryParse(message.data?.toString() ?? '');
+      if (count != null && count >= 0) {
+        completer.complete(count);
+      }
+    };
+
+    try {
+      await danmaku.start(args);
+      return await completer.future.timeout(timeout, onTimeout: () => null);
+    } catch (e) {
+      CoreLog.error(e);
+      return null;
+    } finally {
+      await danmaku.stop();
+    }
+  }
+
   @override
   Future start(dynamic args) async {
     danmakuArgs = args as BiliBiliDanmakuArgs;
@@ -143,28 +172,46 @@ class BiliBiliDanmaku implements LiveDanmaku {
 
   void decodeMessage(List<int> data) {
     try {
-      // 心跳回应中的 Int32 是旧的人气值，不再作为房间观众数上报。
-      int protocolVersion = readInt(data, 6, 2);
-      int operation = readInt(data, 8, 4);
-      var body = data.skip(16).toList();
+      _decodePackets(data);
+    } catch (e) {
+      CoreLog.error(e);
+    }
+  }
+
+  void _decodePackets(List<int> data) {
+    var offset = 0;
+    while (offset + 16 <= data.length) {
+      final packetLength = readInt(data, offset, 4);
+      final headerLength = readInt(data, offset + 4, 2);
+      final protocolVersion = readInt(data, offset + 6, 2);
+      final operation = readInt(data, offset + 8, 4);
+
+      if (packetLength <= 0 ||
+          headerLength < 16 ||
+          headerLength > packetLength ||
+          offset + packetLength > data.length) {
+        break;
+      }
+
+      final body = data.sublist(
+        offset + headerLength,
+        offset + packetLength,
+      );
 
       if (operation == 5) {
         if (protocolVersion == 2) {
-          body = zlib.decode(body);
+          _decodePackets(zlib.decode(body));
         } else if (protocolVersion == 3) {
-          body = brotli.decode(body);
-        }
-
-        var text = utf8.decode(body, allowMalformed: true);
-        var group = text.split(
-          RegExp(r"[\x00-\x1f]+", unicode: true, multiLine: true),
-        );
-        for (var item in group.where((x) => x.length > 2 && x.startsWith('{'))) {
-          parseMessage(item);
+          _decodePackets(brotli.decode(body));
+        } else {
+          final text = utf8.decode(body, allowMalformed: true).trim();
+          if (text.isNotEmpty) {
+            parseMessage(text);
+          }
         }
       }
-    } catch (e) {
-      CoreLog.error(e);
+
+      offset += packetLength;
     }
   }
 
