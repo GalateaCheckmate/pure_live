@@ -1,5 +1,6 @@
 name: Windows Quick Check
 
+# Fast validation for routine pushes; full Windows packaging is manual.
 on:
   workflow_dispatch:
   push:
