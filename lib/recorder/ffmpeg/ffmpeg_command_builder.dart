@@ -6,7 +6,11 @@ class FFmpegCommandBuilder {
     return '"$escaped"';
   }
 
-  /// 本地音频流 HTTP Server
+  static String _safeFilePart(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return sanitized.isEmpty ? 'recording' : sanitized;
+  }
+
   static String buildAudioStreamCommand({
     required String remoteStreamUrl,
     required int port,
@@ -15,7 +19,6 @@ class FFmpegCommandBuilder {
   }) {
     final ua = headers?['user-agent'];
     final headerStr = _buildHeader(headers);
-
     final rwTimeoutMicro = (rwTimeout * 1000000).clamp(0, 2147483647);
 
     final args = <String>[
@@ -54,6 +57,8 @@ class FFmpegCommandBuilder {
   static String buildRecordCommand({
     required String url,
     required String outputDir,
+    required String recordingBatchId,
+    required int sessionIndex,
     required int segmentTime,
     required bool preferBestStream,
     required int rwTimeout,
@@ -62,7 +67,10 @@ class FFmpegCommandBuilder {
   }) {
     final ua = headers?['user-agent'];
     final headerStr = _buildHeader(headers);
-    final outputPath = '$outputDir${Platform.pathSeparator}%Y%m%d_%H%M%S.ts';
+    final safeBatchId = _safeFilePart(recordingBatchId);
+    final safeSessionIndex = sessionIndex.toString().padLeft(3, '0');
+    final outputPath =
+        '$outputDir${Platform.pathSeparator}${safeBatchId}_s${safeSessionIndex}_%05d.ts';
     final rwTimeoutMicro = (rwTimeout * 1000000).clamp(0, 2147483647);
 
     final args = <String>[
@@ -106,15 +114,17 @@ class FFmpegCommandBuilder {
       preferBestStream ? '0:a:0?' : '0:a?',
       '-c',
       'copy',
+      '-avoid_negative_ts',
+      'make_zero',
       '-f',
       'segment',
       '-segment_format',
       'mpegts',
       '-segment_time',
       segmentTime.toString(),
+      '-segment_start_number',
+      '0',
       '-reset_timestamps',
-      '1',
-      '-strftime',
       '1',
       _quote(outputPath),
     ];
@@ -125,8 +135,8 @@ class FFmpegCommandBuilder {
   static String _buildHeader(Map<String, String>? headers) {
     if (headers == null || headers.isEmpty) return '';
     final lines = headers.entries
-        .where((e) => e.key.toLowerCase() != 'user-agent')
-        .map((e) => '${e.key}: ${e.value}')
+        .where((entry) => entry.key.toLowerCase() != 'user-agent')
+        .map((entry) => '${entry.key}: ${entry.value}')
         .join('\r\n');
     return lines.isEmpty ? '' : '$lines\r\n';
   }
