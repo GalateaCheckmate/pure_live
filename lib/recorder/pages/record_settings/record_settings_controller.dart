@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:pure_live/common/index.dart';
 import 'package:pure_live/common/global/app_path_manager.dart';
 import 'package:pure_live/recorder/consts/recorder_config.dart';
@@ -224,11 +225,64 @@ class RecordSettingsController extends GetxController {
   }
 
   Future<void> initRecordPath() async {
+    // Preserve every path the user has explicitly selected before.
     if (recordSavePath.value.isNotEmpty) return;
-    final Directory recordDir =
-        await AppPathManager().getDir(AppPathManager.dirRecords);
+
+    final recordDir = await _resolveDefaultRecordDirectory();
     recordSavePath.value = recordDir.path;
     await RecorderConfig.setRecordSavePath(recordDir.path);
     CacheService.to.invalidateStorageIndex();
+  }
+
+  Future<Directory> _resolveDefaultRecordDirectory() async {
+    if (Platform.isWindows) {
+      // Prefer D:, then the remaining non-system drive letters. A drive is
+      // accepted only after a real create/write/delete permission check.
+      for (var driveCode = 'D'.codeUnitAt(0);
+          driveCode <= 'Z'.codeUnitAt(0);
+          driveCode++) {
+        final driveRoot = '${String.fromCharCode(driveCode)}:\\';
+        try {
+          if (!await Directory(driveRoot).exists()) continue;
+          final directory = await _prepareWindowsRecordDirectory(driveRoot);
+          if (directory != null) return directory;
+        } catch (_) {
+          // Optical, disconnected network or protected drives are skipped.
+        }
+      }
+    }
+
+    // Last-resort fallback keeps the previous safe application directory.
+    return AppPathManager().getDir(AppPathManager.dirRecords);
+  }
+
+  Future<Directory?> _prepareWindowsRecordDirectory(String driveRoot) async {
+    final directory = Directory(
+      p.join(
+        driveRoot,
+        AppPathManager.softNameDir,
+        AppPathManager.dirRecords,
+      ),
+    );
+    File? permissionProbe;
+    try {
+      await directory.create(recursive: true);
+      permissionProbe = File(
+        p.join(
+          directory.path,
+          '.write_test_${DateTime.now().microsecondsSinceEpoch}',
+        ),
+      );
+      await permissionProbe.writeAsString('pure-live-record-path-test', flush: true);
+      await permissionProbe.delete();
+      return directory;
+    } catch (_) {
+      try {
+        if (permissionProbe != null && await permissionProbe.exists()) {
+          await permissionProbe.delete();
+        }
+      } catch (_) {}
+      return null;
+    }
   }
 }
