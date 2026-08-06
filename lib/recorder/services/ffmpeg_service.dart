@@ -47,7 +47,7 @@ class FFmpegService {
       throw StateError('FFmpeg session already active for task $taskId');
     }
 
-    final outputMetrics = _SegmentOutputMetrics.fromCommand(command);
+    final outputMetrics = _SegmentOutputMetrics.fromCommandOrNull(command);
     final ffmpegSession = FFmpegKit.createSession(command);
     final session = FFmpegRecordSession(taskId: taskId, operationId: operationId)
       ..session = ffmpegSession
