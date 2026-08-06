@@ -1,9 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'package:open_filex/open_filex.dart';
 import 'package:pure_live/common/index.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:pure_live/common/utils/hive_pref_util.dart';
 import 'package:pure_live/recorder/ffmpeg/ffmpeg_event.dart';
 import 'package:pure_live/recorder/ffmpeg/ffmpeg_types.dart';
@@ -17,7 +15,7 @@ import 'package:pure_live/recorder/ffmpeg/ffmpeg_command_builder.dart';
 import 'package:pure_live/recorder/services/recorder_task_codec.dart';
 import 'package:pure_live/recorder/services/ffmpeg_header_factory.dart';
 import 'package:pure_live/recorder/services/stream_resolver_service.dart';
-import 'package:pure_live/recorder/services/video_processor_service.dart';
+import 'package:pure_live/recorder/services/video_processing_scheduler.dart';
 import 'package:pure_live/recorder/pages/record_settings/record_settings_controller.dart';
 
 class RecorderController extends GetxService {
@@ -26,15 +24,19 @@ class RecorderController extends GetxService {
   final RecordSettingsController settings = Get.find<RecordSettingsController>();
   final FFmpegManager ffmpeg = FFmpegManager.to;
   final FFmpegScheduler scheduler = FFmpegScheduler.instance;
+  final VideoProcessingScheduler processingScheduler = VideoProcessingScheduler.instance;
   final RxList<LiveRecordTask> tasks = <LiveRecordTask>[].obs;
 
   final Map<String, Timer> _pollTimers = {};
   final Map<String, Timer> _retryTimers = {};
   final Set<String> _pollChecksInFlight = {};
   final Set<String> _startingTasks = {};
+  final Set<String> _watchdogRecovering = {};
   final Map<String, Completer<void>> _lifecycleCompleters = {};
   final Map<String, String> _activeOperationIds = {};
   final Map<String, int> _operationCounters = {};
+  final Map<String, DateTime> _lastProgressUiUpdate = {};
+  final Map<String, DateTime> _lastProgressPersist = {};
 
   Timer? _resourceMonitor;
   Timer? _persistTimer;
@@ -44,14 +46,20 @@ class RecorderController extends GetxService {
   bool _persistAgain = false;
   bool _restoring = false;
   bool _disposed = false;
+  bool _resourceCheckInFlight = false;
 
   int get runningCount => scheduler.runningCount;
   int get queuedCount => scheduler.queuedCount;
+  int get processingQueuedCount => processingScheduler.queuedCount;
 
   @override
   void onInit() {
     super.onInit();
-    _resourceMonitor = Timer.periodic(const Duration(seconds: 30), (_) => _checkResources());
+    _resourceMonitor = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!_resourceCheckInFlight) {
+        unawaited(_checkResources());
+      }
+    });
     _ffmpegSub = ffmpeg.stream.listen(_onFFmpegEvent);
     unawaited(restoreAndAutoPoll());
   }
@@ -73,39 +81,29 @@ class RecorderController extends GetxService {
       case FFmpegEventType.started:
         if (!task.wasStoppedByUser) {
           task.status = RecordStatus.running;
+          task.lastUpdate = DateTime.now();
           updateTask(task);
         }
         break;
       case FFmpegEventType.progress:
         final data = event.data;
-        task.recordedSeconds = (data['time'] ?? 0) ~/ 1000;
-        task.fileSize = data['size'] ?? 0;
-        task.bitrate = (data['bitrate'] ?? 0).toDouble();
-        task.recordSpeed = (data['speed'] ?? 0).toDouble();
-        task.fps = (data['fps'] ?? 0).toDouble();
-        task.lastUpdate = DateTime.now();
-        updateTask(task);
+        task.applyProgress(
+          seconds: (data['time'] ?? 0) ~/ 1000,
+          sessionFileSize: data['size'] ?? 0,
+          currentBitrate: (data['bitrate'] ?? 0).toDouble(),
+          speed: (data['speed'] ?? 0).toDouble(),
+          currentFps: (data['fps'] ?? 0).toDouble(),
+        );
+        _publishProgress(task);
         break;
       case FFmpegEventType.error:
         final errorMessage = event.data['message'] ?? i18n('unknown_error', args: {'error_log': ''});
-        final errorCode = event.data['code'] ?? 0;
         ToastUtil.show(errorMessage);
-
-        final rawLogs = (event.data['raw_logs'] ?? '').toString();
-        final fatalError =
-            (errorCode >= -5 && errorCode < 0) ||
-            errorCode == -2 ||
-            rawLogs.contains('404') ||
-            rawLogs.contains('403') ||
-            rawLogs.contains('invalid argument') ||
-            rawLogs.contains('no such file') ||
-            rawLogs.contains('permission denied') ||
-            rawLogs.contains('unable to open');
         unawaited(
           _onFail(
             task,
             operationId: event.operationId,
-            shouldRetry: !fatalError,
+            shouldRetry: event.data['retryable'] != false,
           ),
         );
         break;
@@ -123,25 +121,44 @@ class RecorderController extends GetxService {
     }
   }
 
-  void updateTask(LiveRecordTask task) {
+  void updateTask(
+    LiveRecordTask task, {
+    bool sort = true,
+    bool persist = true,
+  }) {
     if (_disposed) return;
     final index = tasks.indexWhere((item) => item.taskId == task.taskId);
     if (index == -1) return;
 
     tasks[index] = task;
-    _sortTasks();
-    if (!_restoring) schedulePersist();
+    if (sort) _sortTasks();
+    if (persist && !_restoring) schedulePersist();
+  }
+
+  void _publishProgress(LiveRecordTask task) {
+    final now = DateTime.now();
+    final lastUi = _lastProgressUiUpdate[task.taskId];
+    if (lastUi == null || now.difference(lastUi) >= const Duration(seconds: 1)) {
+      _lastProgressUiUpdate[task.taskId] = now;
+      updateTask(task, sort: false, persist: false);
+    }
+
+    final lastPersist = _lastProgressPersist[task.taskId];
+    if (lastPersist == null || now.difference(lastPersist) >= const Duration(seconds: 15)) {
+      _lastProgressPersist[task.taskId] = now;
+      schedulePersist(delay: Duration.zero);
+    }
   }
 
   void _sortTasks() {
     tasks.value = [...tasks.value]..sort((a, b) => a.status.order.compareTo(b.status.order));
   }
 
-  void schedulePersist() {
+  void schedulePersist({Duration delay = const Duration(milliseconds: 500)}) {
     if (_disposed || _restoring) return;
     _persistAgain = true;
     _persistTimer?.cancel();
-    _persistTimer = Timer(const Duration(milliseconds: 500), () {
+    _persistTimer = Timer(delay, () {
       unawaited(_flushPersist());
     });
   }
@@ -169,8 +186,12 @@ class RecorderController extends GetxService {
         await HivePrefUtil.setAnyPref(RecorderKeys.recorderTasks, snapshot);
         await HivePrefUtil.remove(RecorderKeys.recorderTasksPending);
       } while (_persistAgain);
-    } catch (e, stackTrace) {
-      developer.log('Persist recorder tasks failed: $e', name: 'RecorderController', stackTrace: stackTrace);
+    } catch (error, stackTrace) {
+      developer.log(
+        'Persist recorder tasks failed: $error',
+        name: 'RecorderController',
+        stackTrace: stackTrace,
+      );
     } finally {
       _persistInFlight = false;
       if (_persistAgain && !_disposed) {
@@ -179,29 +200,9 @@ class RecorderController extends GetxService {
     }
   }
 
-  Future<bool> requestStoragePermission() async {
-    if (!Platform.isAndroid) return true;
-
-    try {
-      final androidInfo = await DeviceInfoPlugin().androidInfo;
-      if (androidInfo.version.sdkInt >= 30) {
-        if (await Permission.manageExternalStorage.isGranted) return true;
-        return (await Permission.manageExternalStorage.request()).isGranted;
-      }
-      if (await Permission.storage.isGranted) return true;
-      return (await Permission.storage.request()).isGranted;
-    } catch (e, stackTrace) {
-      developer.log('Storage permission request failed: $e', stackTrace: stackTrace);
-      return (await Permission.storage.request()).isGranted;
-    }
-  }
+  Future<bool> requestStoragePermission() async => true;
 
   Future<void> addTask({required LiveRoom room}) async {
-    if (!await requestStoragePermission()) {
-      ToastUtil.show(i18n('no_storage'));
-      return;
-    }
-
     if (tasks.any((task) => task.roomId == room.roomId && task.platform == room.platform)) return;
 
     final task = LiveRecordTask.fromRoom(room);
@@ -221,6 +222,7 @@ class RecorderController extends GetxService {
   Future<void> startTask(LiveRecordTask task) async {
     task.retryCount = 0;
     task.wasStoppedByUser = false;
+    task.beginNewRecordingBatch();
     await _startTask(task);
   }
 
@@ -257,12 +259,16 @@ class RecorderController extends GetxService {
         task.status = RecordStatus.failed;
         updateTask(task);
       }
-    } catch (e, stackTrace) {
-      developer.log('启动任务异常: $e', name: 'RecorderController', stackTrace: stackTrace);
+    } catch (error, stackTrace) {
+      developer.log(
+        '启动任务异常: $error',
+        name: 'RecorderController',
+        stackTrace: stackTrace,
+      );
       _activeOperationIds.remove(task.taskId);
       task.status = RecordStatus.failed;
       updateTask(task);
-      ToastUtil.show(i18n('recorder_start_failed', args: {'error': e.toString()}));
+      ToastUtil.show(i18n('recorder_start_failed', args: {'error': error.toString()}));
     } finally {
       _startingTasks.remove(task.taskId);
     }
@@ -285,13 +291,8 @@ class RecorderController extends GetxService {
   ) async {
     if (!_isOperationActive(task.taskId, operationId) || token.isCancelled) return;
 
+    task.beginRecordingSession();
     task.status = RecordStatus.preparing;
-    task.recordedSeconds = 0;
-    task.fileSize = 0;
-    task.recordSpeed = 0;
-    task.bitrate = 0;
-    task.fps = 0;
-    task.lastUpdate = DateTime.now();
     updateTask(task);
 
     final completer = Completer<void>();
@@ -319,6 +320,8 @@ class RecorderController extends GetxService {
         headers: headers,
         url: url,
         outputDir: dir.path,
+        recordingBatchId: task.recordingBatchId!,
+        sessionIndex: task.recordingSessionIndex,
         segmentTime: settings.segmentTime.value,
         preferBestStream: settings.preferBestStream.value,
         rwTimeout: settings.rwTimeout.value,
@@ -347,12 +350,14 @@ class RecorderController extends GetxService {
         command: command,
       );
       await completer.future;
-    } on StreamException catch (e) {
-      developer.log('解析失败: ${e.message}', name: 'RecorderController');
+    } on StreamException catch (error) {
+      developer.log('解析失败: ${error.message}', name: 'RecorderController');
       if (!_isOperationActive(task.taskId, operationId) || token.isCancelled) return;
 
-      ToastUtil.show(i18n('recorder_resolve_failed', args: {'name': task.nick, 'error': e.message}));
-      if (!e.retryable) {
+      ToastUtil.show(
+        i18n('recorder_resolve_failed', args: {'name': task.nick, 'error': error.message}),
+      );
+      if (!error.retryable) {
         task.status = RecordStatus.waitingLive;
         updateTask(task);
         _startPolling(task);
@@ -360,10 +365,16 @@ class RecorderController extends GetxService {
         return;
       }
       await _onFail(task, operationId: operationId);
-    } catch (e, stackTrace) {
-      developer.log('任务运行异常: $e', name: 'RecorderController', stackTrace: stackTrace);
+    } catch (error, stackTrace) {
+      developer.log(
+        '任务运行异常: $error',
+        name: 'RecorderController',
+        stackTrace: stackTrace,
+      );
       if (_isOperationActive(task.taskId, operationId) && !token.isCancelled) {
-        ToastUtil.show(i18n('recorder_exception', args: {'name': task.nick, 'error': e.toString()}));
+        ToastUtil.show(
+          i18n('recorder_exception', args: {'name': task.nick, 'error': error.toString()}),
+        );
         await _onFail(task, operationId: operationId);
       }
     } finally {
@@ -413,21 +424,11 @@ class RecorderController extends GetxService {
     if (!_isOperationActive(task.taskId, operationId)) return;
     if (task.status == RecordStatus.processing || task.status == RecordStatus.completed) return;
 
-    try {
-      if (task.outputDir != null && task.recordedSeconds > 0) {
-        task.status = RecordStatus.processing;
-        updateTask(task);
-        final processed = await _processVideo(task);
-        if (!_isOperationActive(task.taskId, operationId)) return;
-        task.status = processed ? RecordStatus.completed : RecordStatus.failed;
-      } else {
-        task.status = manualStop ? RecordStatus.stopped : RecordStatus.completed;
-      }
-      task.retryCount = 0;
-      updateTask(task);
-    } finally {
-      _completeLifecycle(task.taskId, operationId);
-    }
+    task.finalizeCurrentSession();
+    _completeLifecycle(task.taskId, operationId);
+
+    final finalStatus = manualStop ? RecordStatus.stopped : RecordStatus.completed;
+    await _enqueueVideoProcessing(task, finalStatus: finalStatus);
   }
 
   Future<void> _onFail(
@@ -436,26 +437,25 @@ class RecorderController extends GetxService {
     bool shouldRetry = true,
   }) async {
     if (!_isOperationActive(task.taskId, operationId)) return;
+
+    task.finalizeCurrentSession();
     _completeLifecycle(task.taskId, operationId);
 
     if (task.wasStoppedByUser) {
-      task.status = RecordStatus.stopped;
-      updateTask(task);
+      await _enqueueVideoProcessing(task, finalStatus: RecordStatus.stopped);
       return;
     }
 
     task.lastFailTime = DateTime.now();
     if (!shouldRetry || !task.autoReconnect || !settings.autoReconnect.value) {
-      task.status = RecordStatus.failed;
       task.retryCount = 0;
-      updateTask(task);
+      await _enqueueVideoProcessing(task, finalStatus: RecordStatus.failed);
       return;
     }
 
     task.retryCount++;
     if (task.retryCount >= settings.maxRetryCount.value) {
-      task.status = RecordStatus.waitingLive;
-      updateTask(task);
+      await _enqueueVideoProcessing(task, finalStatus: RecordStatus.waitingLive);
       _startPolling(task);
       return;
     }
@@ -469,6 +469,47 @@ class RecorderController extends GetxService {
       if (_disposed || !tasks.any((item) => item.taskId == task.taskId) || task.wasStoppedByUser) return;
       unawaited(_startTask(task));
     });
+  }
+
+  Future<void> _enqueueVideoProcessing(
+    LiveRecordTask task, {
+    required RecordStatus finalStatus,
+  }) async {
+    final batchId = task.recordingBatchId;
+    if (!task.hasRecordedData || task.outputDir == null || batchId == null || batchId.isEmpty) {
+      task.status = finalStatus;
+      task.retryCount = 0;
+      updateTask(task);
+      return;
+    }
+
+    final snapshot = task.cloneForProcessing();
+    task.status = RecordStatus.processing;
+    updateTask(task);
+
+    final enqueued = processingScheduler.enqueue(
+      task: snapshot,
+      onComplete: (success) async {
+        await settings.refreshCacheSize();
+        if (_disposed) return;
+
+        final current = tasks.firstWhereOrNull((item) => item.taskId == snapshot.taskId);
+        if (current == null ||
+            current.recordingBatchId != snapshot.recordingBatchId ||
+            current.status != RecordStatus.processing) {
+          return;
+        }
+
+        current.status = success ? finalStatus : RecordStatus.failed;
+        current.retryCount = 0;
+        updateTask(current);
+      },
+    );
+
+    if (!enqueued) {
+      task.status = RecordStatus.failed;
+      updateTask(task);
+    }
   }
 
   Duration _retryDelay(int retryCount) {
@@ -485,18 +526,6 @@ class RecorderController extends GetxService {
     if (operationId == null || _activeOperationIds[taskId] != operationId) return;
     final completer = _lifecycleCompleters[taskId];
     if (completer != null && !completer.isCompleted) completer.complete();
-  }
-
-  Future<bool> _processVideo(LiveRecordTask task) async {
-    if (task.outputDir == null) return false;
-    try {
-      final success = await VideoProcessorService.to.convertToMp4(task: task);
-      await settings.refreshCacheSize();
-      return success;
-    } catch (e, stackTrace) {
-      developer.log('解析视频出错: $e', name: 'RecorderController', stackTrace: stackTrace);
-      return false;
-    }
   }
 
   void _startPolling(LiveRecordTask task) {
@@ -524,8 +553,8 @@ class RecorderController extends GetxService {
           _stopPolling(task.taskId);
           await startTask(task);
         }
-      } catch (e) {
-        developer.log('Recorder polling failed: $e', name: 'RecorderController');
+      } catch (error) {
+        developer.log('Recorder polling failed: $error', name: 'RecorderController');
       } finally {
         _pollChecksInFlight.remove(task.taskId);
       }
@@ -541,8 +570,46 @@ class RecorderController extends GetxService {
     _retryTimers.remove(taskId)?.cancel();
   }
 
+  Future<void> _recoverStalledRecordings() async {
+    final stalledTasks = tasks.where((task) => task.isStalled).toList(growable: false);
+    for (final task in stalledTasks) {
+      if (!_watchdogRecovering.add(task.taskId)) continue;
+
+      final operationId = _activeOperationIds[task.taskId];
+      if (operationId == null ||
+          !scheduler.isRunning(task.taskId) ||
+          !ffmpeg.isRunning(task.taskId, operationId: operationId)) {
+        _watchdogRecovering.remove(task.taskId);
+        continue;
+      }
+
+      try {
+        developer.log(
+          'Recorder watchdog restarting stalled task ${task.taskId}',
+          name: 'RecorderController',
+        );
+        await _onFail(task, operationId: operationId, shouldRetry: true);
+        _activeOperationIds.remove(task.taskId);
+        await ffmpeg.stop(task.taskId, operationId: operationId);
+      } catch (error, stackTrace) {
+        developer.log(
+          'Recorder watchdog recovery failed: $error',
+          name: 'RecorderController',
+          stackTrace: stackTrace,
+        );
+      } finally {
+        _watchdogRecovering.remove(task.taskId);
+      }
+    }
+  }
+
   Future<void> _checkResources() async {
+    if (_resourceCheckInFlight || _disposed) return;
+    _resourceCheckInFlight = true;
+
     try {
+      await _recoverStalledRecordings();
+
       final cacheMB = await CacheService.to.getCacheSize();
       final rssMB = ProcessInfo.currentRss / 1024 / 1024;
       final maxMemoryMB = (Platform.numberOfProcessors * 1024).toDouble();
@@ -557,8 +624,10 @@ class RecorderController extends GetxService {
       if (rssMB > maxMemoryMB * 0.9) {
         developer.log('Memory usage too high', name: 'RecorderController');
       }
-    } catch (e) {
-      developer.log('_checkResources error: $e', name: 'RecorderController');
+    } catch (error) {
+      developer.log('_checkResources error: $error', name: 'RecorderController');
+    } finally {
+      _resourceCheckInFlight = false;
     }
   }
 
@@ -572,6 +641,9 @@ class RecorderController extends GetxService {
     _completeLifecycle(task.taskId, operationId);
     _activeOperationIds.remove(task.taskId);
     _lifecycleCompleters.remove(task.taskId);
+    _lastProgressUiUpdate.remove(task.taskId);
+    _lastProgressPersist.remove(task.taskId);
+    _watchdogRecovering.remove(task.taskId);
     tasks.removeWhere((item) => item.taskId == task.taskId);
     _sortTasks();
     schedulePersist();
@@ -595,8 +667,12 @@ class RecorderController extends GetxService {
             restored = decoded;
             break;
           }
-        } catch (e, stackTrace) {
-          developer.log('Invalid recorder task snapshot: $e', name: 'RecorderController', stackTrace: stackTrace);
+        } catch (error, stackTrace) {
+          developer.log(
+            'Invalid recorder task snapshot: $error',
+            name: 'RecorderController',
+            stackTrace: stackTrace,
+          );
         }
       }
 
@@ -637,25 +713,18 @@ class RecorderController extends GetxService {
         updateTask(task);
         _startPolling(task);
       }
-    } catch (e) {
-      developer.log('Refresh recorder task failed: $e', name: 'RecorderController');
+    } catch (error) {
+      developer.log('Refresh recorder task failed: $error', name: 'RecorderController');
       task.status = RecordStatus.waitingLive;
       updateTask(task);
       _startPolling(task);
     }
   }
 
-  void openFileDir() async {
+  Future<void> openFileDir() async {
     final path = settings.recordSavePath.value;
-    if (Platform.isWindows) {
-      await Process.run('explorer', [path]);
-    } else if (Platform.isMacOS) {
-      await Process.run('open', [path]);
-    } else if (Platform.isLinux) {
-      await Process.run('xdg-open', [path]);
-    } else if (Platform.isAndroid) {
-      await OpenFilex.open(path);
-    }
+    if (path.isEmpty) return;
+    await Process.run('explorer.exe', [path]);
   }
 
   @override
@@ -673,12 +742,16 @@ class RecorderController extends GetxService {
     _pollTimers.clear();
     _retryTimers.clear();
     _pollChecksInFlight.clear();
+    _watchdogRecovering.clear();
+    _lastProgressUiUpdate.clear();
+    _lastProgressPersist.clear();
 
     for (final completer in _lifecycleCompleters.values) {
       if (!completer.isCompleted) completer.complete();
     }
     _lifecycleCompleters.clear();
     _activeOperationIds.clear();
+    processingScheduler.clearPending();
 
     unawaited(_ffmpegSub.cancel());
     unawaited(scheduler.clearAll());
