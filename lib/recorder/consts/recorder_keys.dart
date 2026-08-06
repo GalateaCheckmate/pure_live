@@ -1,5 +1,6 @@
 class RecorderKeys {
   static const segmentTime = 'segmentTime';
+  static const maxMergeDurationSeconds = 'max_merge_duration_seconds';
   static const maxTaskCount = 'maxTaskCount';
   static const autoReconnect = 'autoReconnect';
   static const maxCacheMB = 'maxCacheMB';
