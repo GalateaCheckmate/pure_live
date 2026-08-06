@@ -110,7 +110,10 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     detail.value = room;
     currentSite = Sites.of(site);
     isCurrentRoomAudioOnly.value = SettingsService.to.player.audioOnly.v;
-    if (SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+    final shouldInitializeDanmaku =
+        SettingsService.to.danmaku.enableDanmakuDisplay.v ||
+        currentSite.id == Sites.bilibiliSite;
+    if (shouldInitializeDanmaku) {
       liveDanmaku = currentSite.liveSite.getDanmaku();
       _danmakuInitialized = true;
     }
@@ -251,9 +254,12 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
       }
 
       const except = [Sites.kuaishouSite, Sites.iptvSite, Sites.ccSite];
+      final shouldConnectDanmaku =
+          SettingsService.to.danmaku.enableDanmakuDisplay.v ||
+          liveRoom.platform == Sites.bilibiliSite;
 
       if (!except.contains(liveRoom.platform) &&
-          SettingsService.to.danmaku.enableDanmakuDisplay.v &&
+          shouldConnectDanmaku &&
           _danmakuInitialized) {
         final needReconnect = _needReconnectDanmaku(liveRoom);
         if (needReconnect) {
@@ -322,7 +328,10 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     detail.value = newRoom;
     currentSite = Sites.of(newRoom.platform!);
 
-    if (!sameRoom && SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+    final shouldInitializeDanmaku =
+        SettingsService.to.danmaku.enableDanmakuDisplay.v ||
+        newRoom.platform == Sites.bilibiliSite;
+    if (!sameRoom && shouldInitializeDanmaku) {
       liveDanmaku = currentSite.liveSite.getDanmaku();
       _danmakuInitialized = true;
     }
@@ -373,20 +382,36 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
 
   void initDanmau() {
     if (!_hasRoom || !_danmakuInitialized) return;
-    if (!SettingsService.to.danmaku.enableDanmakuDisplay.v) {
+
+    final displayDanmaku = SettingsService.to.danmaku.enableDanmakuDisplay.v;
+    final currentPlatform = detail.value?.platform;
+    if (!displayDanmaku && currentPlatform != Sites.bilibiliSite) {
       return;
     }
-    if (detail.value!.isRecord == true) {
-      messages.add(_systemMsg(i18n('recording_mode_notice')));
-    }
 
-    messages.add(_systemMsg(i18n('connect_danmaku_server')));
+    if (displayDanmaku) {
+      if (detail.value!.isRecord == true) {
+        messages.add(_systemMsg(i18n('recording_mode_notice')));
+      }
+      messages.add(_systemMsg(i18n('connect_danmaku_server')));
+    }
 
     final rxVideoCtrl = videoController;
 
     liveDanmaku.onMessage = (msg) {
       if (_closed) return;
-      if (msg.type == LiveMessageType.chat) {
+
+      if (msg.type == LiveMessageType.online &&
+          detail.value?.platform == Sites.bilibiliSite) {
+        final audienceCount = int.tryParse(msg.data?.toString() ?? '');
+        if (audienceCount != null && audienceCount >= 0) {
+          detail.value!.watching = audienceCount.toString();
+          detail.refresh();
+        }
+        return;
+      }
+
+      if (msg.type == LiveMessageType.chat && displayDanmaku) {
         if (SettingsService.to.fav.shieldList.v.every((e) => !msg.message.contains(e))) {
           _addMessage(msg);
           rxVideoCtrl.value?.sendDanmaku(msg);
@@ -395,11 +420,13 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     };
 
     liveDanmaku.onClose = (msg) {
-      if (!_closed) messages.add(_systemMsg(msg));
+      if (!_closed && displayDanmaku) messages.add(_systemMsg(msg));
     };
 
     liveDanmaku.onReady = () {
-      if (!_closed) messages.add(_systemMsg(i18n('danmaku_connected'));
+      if (!_closed && displayDanmaku) {
+        messages.add(_systemMsg(i18n('danmaku_connected')));
+      }
     };
   }
 
