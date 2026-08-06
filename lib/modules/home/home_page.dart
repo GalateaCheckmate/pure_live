@@ -1,8 +1,5 @@
-import 'dart:io';
 import 'dart:async';
-import 'package:flutter/services.dart';
 import 'package:pure_live/common/index.dart';
-import 'package:move_to_desktop/move_to_desktop.dart';
 import 'package:pure_live/common/consts/app_consts.dart';
 import 'package:pure_live/modules/areas/areas_page.dart';
 import 'package:pure_live/modules/home/mobile_view.dart';
@@ -36,19 +33,6 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
   void initState() {
     super.initState();
     _syncInitialIndex();
-
-    WidgetsBinding.instance.addPostFrameCallback((timeStamp) async {
-      if (Platform.isAndroid) {
-        SystemChrome.setSystemUIOverlayStyle(
-          SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            systemNavigationBarColor: Theme.of(context).navigationBarTheme.backgroundColor,
-          ),
-        );
-        SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      }
-    });
-
     addToOverlay();
 
     favoriteController.tabBottomIndex.addListener(() {
@@ -73,6 +57,12 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
     });
   }
 
+  @override
+  void dispose() {
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
   void _syncInitialIndex() {
     final activeIds = SettingsService.to.app.savedMenuIds.v;
     if (activeIds.isNotEmpty) {
@@ -85,9 +75,7 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
   }
 
   void debounceListen(Function? func, [int delay = 1000]) {
-    if (_debounceTimer != null) {
-      _debounceTimer?.cancel();
-    }
+    _debounceTimer?.cancel();
     _debounceTimer = Timer(Duration(milliseconds: delay), () {
       func?.call();
       _debounceTimer = null;
@@ -117,69 +105,54 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
     );
     await VersionUtil.initPackageInfo();
     await VersionUtil().checkUpdate();
-    bool isHasNerVersion = SettingsService.to.app.enableAutoCheckUpdate.v && VersionUtil.hasNewVersion();
-    if (mounted) {
-      if (overlay != null && isHasNerVersion) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => overlay.insert(entry));
-      } else {
-        if (overlay != null && isHasNerVersion) {
-          overlay.insert(entry);
-        }
-      }
-    }
-  }
-
-  void onBackButtonPressed(bool didPop, _) async {
-    if (!didPop) {
-      MoveToDesktop().moveToDesktop();
-    }
+    final hasNewVersion = SettingsService.to.app.enableAutoCheckUpdate.v && VersionUtil.hasNewVersion();
+    if (!mounted || overlay == null || !hasNewVersion) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) overlay.insert(entry);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: onBackButtonPressed,
-      child: LayoutBuilder(
-        builder: (context, constraint) {
-          final bool isTablet = constraint.maxWidth > 680;
+    return LayoutBuilder(
+      builder: (context, constraint) {
+        final bool isTablet = constraint.maxWidth > 680;
 
-          return Obx(() {
-            final activeMenuIds = List<String>.from(SettingsService.to.app.savedMenuIds.v);
-            if (isTablet) {
-              activeMenuIds.remove(HomeMenu.record.id);
+        return Obx(() {
+          final activeMenuIds = List<String>.from(SettingsService.to.app.savedMenuIds.v);
+          if (isTablet) {
+            activeMenuIds.remove(HomeMenu.record.id);
+          }
+          if (activeMenuIds.isEmpty) return const Scaffold();
+
+          int adjustedIndex = _selectedIndex;
+          if (adjustedIndex >= HomeMenu.values.length ||
+              (isTablet && HomeMenu.values[adjustedIndex] == HomeMenu.record)) {
+            final fallbackMenu = HomeMenu.fromId(activeMenuIds.first);
+            if (fallbackMenu != null) {
+              adjustedIndex = fallbackMenu.index;
             }
-            if (activeMenuIds.isEmpty) return const Scaffold();
+          }
 
-            int adjustedIndex = _selectedIndex;
-            if (adjustedIndex >= HomeMenu.values.length ||
-                (isTablet && HomeMenu.values[adjustedIndex] == HomeMenu.record)) {
-              final fallbackMenu = HomeMenu.fromId(activeMenuIds.first);
-              if (fallbackMenu != null) {
-                adjustedIndex = fallbackMenu.index;
-              }
-            }
+          final currentMenu = HomeMenu.values[adjustedIndex];
+          final currentWidget = _pageMap[currentMenu] ?? const SizedBox.shrink();
 
-            final currentMenu = HomeMenu.values[adjustedIndex];
-            final currentWidget = _pageMap[currentMenu] ?? const SizedBox.shrink();
-
-            return !isTablet
-                ? HomeMobileView(
-                    body: currentWidget,
-                    index: adjustedIndex,
-                    onDestinationSelected: onDestinationSelected,
-                    onFavoriteDoubleTap: handMoveRefresh,
-                  )
-                : HomeTabletView(
-                    body: currentWidget,
-                    index: adjustedIndex,
-                    activeMenuIds: activeMenuIds,
-                    onDestinationSelected: onDestinationSelected,
-                  );
-          });
-        },
-      ),
+          return !isTablet
+              ? HomeMobileView(
+                  body: currentWidget,
+                  index: adjustedIndex,
+                  onDestinationSelected: onDestinationSelected,
+                  onFavoriteDoubleTap: handMoveRefresh,
+                )
+              : HomeTabletView(
+                  body: currentWidget,
+                  index: adjustedIndex,
+                  activeMenuIds: activeMenuIds,
+                  onDestinationSelected: onDestinationSelected,
+                );
+        });
+      },
     );
   }
 
