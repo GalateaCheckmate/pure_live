@@ -1,104 +1,97 @@
 import 'dart:async';
-import 'package:rxdart/rxdart.dart';
-import '../models/player_state.dart';
-import '../models/player_exception.dart';
-import '../models/player_error_type.dart';
-import 'package:pure_live/common/index.dart';
-import '../interface/unified_player_interface.dart';
-import 'package:media_kit_video/media_kit_video.dart';
+
 import 'package:media_kit/media_kit.dart' hide PlayerState;
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:pure_live/common/global/platform_utils.dart';
+import 'package:pure_live/common/index.dart';
+import 'package:rxdart/rxdart.dart';
+
+import '../interface/unified_player_interface.dart';
+import '../models/player_error_type.dart';
+import '../models/player_exception.dart';
+import '../models/player_state.dart';
 
 class MediaKitAdapter implements UnifiedPlayer {
   late final Player _player;
-
   late final VideoController _controller;
 
   bool _initialized = false;
-
   bool _disposed = false;
-
   bool _listenerBound = false;
-
+  bool _isAudioOnly = false;
   String? _currentUrl;
 
-  bool _isAudioOnly = false;
+  Future<void> _operationTail = Future<void>.value();
+  int _sourceGeneration = 0;
 
-  // =========================
-  // subjects
-  // =========================
-
-  final _stateSubject = BehaviorSubject<PlayerState>.seeded(PlayerState.idle);
-
+  final _stateSubject =
+      BehaviorSubject<PlayerState>.seeded(PlayerState.idle);
   final _playingSubject = BehaviorSubject<bool>.seeded(false);
-
   final _loadingSubject = BehaviorSubject<bool>.seeded(false);
-
   final _errorSubject = PublishSubject<PlayerException>();
-
   final _completeSubject = BehaviorSubject<bool>.seeded(false);
-
   final _widthSubject = BehaviorSubject<int?>.seeded(null);
-
   final _heightSubject = BehaviorSubject<int?>.seeded(null);
 
-  // =========================
-  // subscriptions
-  // =========================
+  final List<StreamSubscription<dynamic>> _subscriptions = [];
+  StreamSubscription<bool>? _playingSub;
+  StreamSubscription<bool>? _bufferingSub;
+  StreamSubscription<int?>? _widthSub;
+  StreamSubscription<int?>? _heightSub;
+  StreamSubscription<bool>? _completeSub;
+  StreamSubscription<dynamic>? _errorSub;
 
-  final List<StreamSubscription> _subscriptions = [];
+  Future<T> _enqueue<T>(Future<T> Function() operation) {
+    final completer = Completer<T>();
+    _operationTail = _operationTail.catchError((_) {}).then((_) async {
+      try {
+        completer.complete(await operation());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
+    });
+    return completer.future;
+  }
 
-  StreamSubscription? _playingSub;
-
-  StreamSubscription? _bufferingSub;
-
-  StreamSubscription? _widthSub;
-
-  StreamSubscription? _heightSub;
-
-  StreamSubscription? _completeSub;
-
-  StreamSubscription? _errorSub;
-
-  // =========================
-  // init
-  // =========================
+  bool _isGenerationCurrent(int generation) {
+    return !_disposed && generation == _sourceGeneration;
+  }
 
   @override
   Future<void> init({bool audioOnly = false}) async {
-    if (_initialized) return;
+    if (_initialized || _disposed) return;
+
     _isAudioOnly = audioOnly;
-    _disposed = false;
-
     _listenerBound = false;
-
     _currentUrl = null;
 
     try {
       _stateSubject.add(PlayerState.initializing);
-
       _player = Player();
 
       if (_player.platform is NativePlayer) {
         final native = _player.platform as dynamic;
-
         await native.setProperty('force-seekable', 'yes');
-
-        await native.setProperty('protocol_whitelist', 'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto');
-
+        await native.setProperty(
+          'protocol_whitelist',
+          'httpproxy,udp,rtp,tcp,tls,data,file,http,https,crypto',
+        );
         await native.setProperty('demuxer-lavf-probsize', '2097152');
-
         await native.setProperty('demuxer-lavf-analyzeduration', '10');
-
         await native.setProperty('network-timeout', '30');
 
         if (SettingsService.to.player.customPlayerOutput.v) {
-          await native.setProperty('ao', SettingsService.to.player.audioOutputDriver.v);
+          await native.setProperty(
+            'ao',
+            SettingsService.to.player.audioOutputDriver.v,
+          );
         }
 
-        if (SettingsService.to.proxy.enableProxy.v && SettingsService.to.proxy.proxyHost.v.isNotEmpty) {
-          final proxyUrl = "http://${SettingsService.to.proxy.proxyHost.v}:${SettingsService.to.proxy.proxyPort.v}";
-
+        if (SettingsService.to.proxy.enableProxy.v &&
+            SettingsService.to.proxy.proxyHost.v.isNotEmpty) {
+          final proxyUrl =
+              'http://${SettingsService.to.proxy.proxyHost.v}:'
+              '${SettingsService.to.proxy.proxyPort.v}';
           await native.setProperty('http-proxy', proxyUrl);
         }
 
@@ -107,10 +100,6 @@ class MediaKitAdapter implements UnifiedPlayer {
         }
       }
 
-      // =========================
-      // controller
-      // =========================
-      //  根据是否为纯音频，选择不同的控制器配置
       _controller = audioOnly
           ? VideoController(
               _player,
@@ -121,55 +110,54 @@ class MediaKitAdapter implements UnifiedPlayer {
               ),
             )
           : SettingsService.to.player.playerCompatMode.v
-          ? VideoController(
-              _player,
-              configuration: const VideoControllerConfiguration(vo: 'mediacodec_embed', hwdec: 'mediacodec'),
-            )
-          : SettingsService.to.player.customPlayerOutput.v
-          ? VideoController(
-              _player,
-              configuration: VideoControllerConfiguration(
-                vo: SettingsService.to.player.videoOutputDriver.v,
-                hwdec: PlatformUtils.isMacOS ? 'no' : SettingsService.to.player.videoHardwareDecoder.v,
-                enableHardwareAcceleration: !PlatformUtils.isMacOS,
-              ),
-            )
-          : VideoController(
-              _player,
-              configuration: VideoControllerConfiguration(
-                enableHardwareAcceleration: PlatformUtils.isMacOS ? false : SettingsService.to.player.enableCodec.v,
-                hwdec: PlatformUtils.isMacOS ? 'no' : null,
-                androidAttachSurfaceAfterVideoParameters: false,
-              ),
-            );
+              ? VideoController(
+                  _player,
+                  configuration: const VideoControllerConfiguration(
+                    vo: 'mediacodec_embed',
+                    hwdec: 'mediacodec',
+                  ),
+                )
+              : SettingsService.to.player.customPlayerOutput.v
+                  ? VideoController(
+                      _player,
+                      configuration: VideoControllerConfiguration(
+                        vo: SettingsService.to.player.videoOutputDriver.v,
+                        hwdec: PlatformUtils.isMacOS
+                            ? 'no'
+                            : SettingsService
+                                .to.player.videoHardwareDecoder.v,
+                        enableHardwareAcceleration: !PlatformUtils.isMacOS,
+                      ),
+                    )
+                  : VideoController(
+                      _player,
+                      configuration: VideoControllerConfiguration(
+                        enableHardwareAcceleration: PlatformUtils.isMacOS
+                            ? false
+                            : SettingsService.to.player.enableCodec.v,
+                        hwdec: PlatformUtils.isMacOS ? 'no' : null,
+                        androidAttachSurfaceAfterVideoParameters: false,
+                      ),
+                    );
 
-      // 2. 下发底层 MPV 内核配置（必须紧跟在 Controller 创建之后）
       if (audioOnly) {
         await applyAudioOnlySettings();
       }
 
       await _bindListeners();
-
       _initialized = true;
-
       _stateSubject.add(PlayerState.initialized);
-    } catch (e, s) {
+    } catch (error, stackTrace) {
       final exception = PlayerException(
         message: 'MediaKit init failed',
         type: PlayerErrorType.initialization,
-        error: e,
-        stackTrace: s,
+        error: error,
+        stackTrace: stackTrace,
       );
-
       _safeAddError(exception);
-
       throw exception;
     }
   }
-
-  // =========================
-  // datasource
-  // =========================
 
   @override
   Future<void> setDataSource(
@@ -178,178 +166,154 @@ class MediaKitAdapter implements UnifiedPlayer {
     Map<String, String> headers, {
     LiveRoom? room,
     bool audioOnly = false,
-  }) async {
-    if (_disposed) return;
+  }) {
+    final generation = ++_sourceGeneration;
 
-    if (_currentUrl == url && isPlayingNow) {
-      return;
-    }
-    _isAudioOnly = audioOnly;
-    _currentUrl = url;
+    return _enqueue(() async {
+      if (!_isGenerationCurrent(generation)) return;
+      if (_currentUrl == url && isPlayingNow) return;
 
-    try {
-      _loadingSubject.add(true);
+      _isAudioOnly = audioOnly;
+      _currentUrl = url;
 
-      _stateSubject.add(PlayerState.preparing);
+      try {
+        _loadingSubject.add(true);
+        _stateSubject.add(PlayerState.preparing);
+        _completeSubject.add(false);
+        _playingSubject.add(false);
+        _widthSubject.add(null);
+        _heightSubject.add(null);
 
-      _completeSubject.add(false);
+        // Detach the previous demuxer & texture before opening the next source.
+        // Keeping the Player instance is still faster than rebuilding MPV, while
+        // avoiding overlapping open calls during rapid room switching.
+        try {
+          await _player.stop();
+        } catch (_) {}
 
-      _widthSubject.add(null);
+        if (!_isGenerationCurrent(generation)) return;
 
-      _heightSubject.add(null);
+        await _player.open(
+          Media(url, httpHeaders: headers),
+          play: true,
+        );
 
-      await _player.open(Media(url, httpHeaders: headers), play: true);
+        if (!_isGenerationCurrent(generation)) {
+          try {
+            await _player.stop();
+          } catch (_) {}
+          return;
+        }
 
-      _stateSubject.add(PlayerState.ready);
+        final targetVolume = PlatformUtils.isMobile
+            ? 1.0
+            : room?.getSavedVolume() ?? 1.0;
+        await _setVolumeInternal(targetVolume);
 
-      if (PlatformUtils.isMobile) {
-        await setVolume(1.0);
-      } else {
-        final targetVolume = room?.getSavedVolume() ?? 1.0;
-        await setVolume(targetVolume);
+        if (_isGenerationCurrent(generation)) {
+          _stateSubject.add(PlayerState.ready);
+        }
+      } catch (error, stackTrace) {
+        if (!_isGenerationCurrent(generation)) return;
+
+        final exception = PlayerException(
+          message: 'Media open failed',
+          type: PlayerErrorType.source,
+          error: error,
+          stackTrace: stackTrace,
+        );
+        _safeAddError(exception);
+        _stateSubject.add(PlayerState.error);
+        throw exception;
+      } finally {
+        if (_isGenerationCurrent(generation)) {
+          _loadingSubject.add(false);
+        }
       }
-    } catch (e, s) {
-      final exception = PlayerException(
-        message: 'Media open failed',
-        type: PlayerErrorType.source,
-        error: e,
-        stackTrace: s,
-      );
-
-      _safeAddError(exception);
-
-      _stateSubject.add(PlayerState.error);
-
-      throw exception;
-    } finally {
-      if (!_disposed) {
-        _loadingSubject.add(false);
-      }
-    }
+    });
   }
-
-  // =========================
-  // listeners
-  // =========================
 
   Future<void> _bindListeners() async {
     if (_listenerBound) return;
-
     _listenerBound = true;
-
     await _cancelAllSubscriptions();
-
-    // =========================
-    // playing
-    // =========================
 
     _playingSub = _player.stream.playing.listen(
       (playing) {
         if (_disposed) return;
-
         _playingSubject.add(playing);
-
         if (!_loadingSubject.value) {
-          _stateSubject.add(playing ? PlayerState.playing : PlayerState.paused);
+          _stateSubject.add(
+            playing ? PlayerState.playing : PlayerState.paused,
+          );
         }
       },
-      onError: (e, s) {
-        _emitError(e, s, PlayerErrorType.native);
+      onError: (Object error, StackTrace stackTrace) {
+        _emitError(error, stackTrace, PlayerErrorType.native);
       },
     );
-
-    // =========================
-    // buffering
-    // =========================
 
     _bufferingSub = _player.stream.buffering.listen(
       (loading) {
         if (_disposed) return;
-
         _loadingSubject.add(loading);
-
         if (loading) {
           _stateSubject.add(PlayerState.buffering);
         } else {
-          _stateSubject.add(_playingSubject.value ? PlayerState.playing : PlayerState.paused);
+          _stateSubject.add(
+            _playingSubject.value
+                ? PlayerState.playing
+                : PlayerState.paused,
+          );
         }
       },
-      onError: (e, s) {
-        _emitError(e, s, PlayerErrorType.native);
+      onError: (Object error, StackTrace stackTrace) {
+        _emitError(error, stackTrace, PlayerErrorType.native);
       },
     );
 
-    // =========================
-    // width
-    // =========================
-
-    _widthSub = _player.stream.width.listen((val) {
-      if (_disposed) return;
-
-      _widthSubject.add(val);
+    _widthSub = _player.stream.width.listen((value) {
+      if (!_disposed) _widthSubject.add(value);
     });
-
-    // =========================
-    // height
-    // =========================
-
-    _heightSub = _player.stream.height.listen((val) {
-      if (_disposed) return;
-
-      _heightSubject.add(val);
+    _heightSub = _player.stream.height.listen((value) {
+      if (!_disposed) _heightSubject.add(value);
     });
-
-    // =========================
-    // completed
-    // =========================
 
     _completeSub = _player.stream.completed.listen(
       (completed) {
-        if (_disposed) return;
-
-        if (!completed) return;
-
+        if (_disposed || !completed) return;
         _completeSubject.add(true);
-
         _stateSubject.add(PlayerState.completed);
       },
-      onError: (e, s) {
-        _emitError(e, s, PlayerErrorType.native);
+      onError: (Object error, StackTrace stackTrace) {
+        _emitError(error, stackTrace, PlayerErrorType.native);
       },
     );
 
-    // =========================
-    // error
-    // =========================
-
     _errorSub = _player.stream.error.distinct().listen((error) {
       if (_disposed) return;
-
       final type = _mapErrorType(error.toString());
-
-      _safeAddError(PlayerException(message: error.toString(), type: type));
-
+      _safeAddError(
+        PlayerException(message: error.toString(), type: type),
+      );
       _stateSubject.add(PlayerState.error);
     });
 
-    // =========================
-    // collect
-    // =========================
-
-    _subscriptions.addAll([_playingSub!, _bufferingSub!, _widthSub!, _heightSub!, _completeSub!, _errorSub!]);
+    _subscriptions.addAll([
+      _playingSub!,
+      _bufferingSub!,
+      _widthSub!,
+      _heightSub!,
+      _completeSub!,
+      _errorSub!,
+    ]);
   }
 
-  // =========================
-  // cancel subscriptions
-  // =========================
-
   Future<void> _cancelAllSubscriptions() async {
-    for (final sub in _subscriptions) {
-      await sub.cancel();
+    for (final subscription in _subscriptions.toList()) {
+      await subscription.cancel();
     }
-
     _subscriptions.clear();
-
     _playingSub = null;
     _bufferingSub = null;
     _widthSub = null;
@@ -358,111 +322,125 @@ class MediaKitAdapter implements UnifiedPlayer {
     _errorSub = null;
   }
 
-  // =========================
-  // emit error
-  // =========================
-
-  void _emitError(Object error, StackTrace stackTrace, PlayerErrorType type) {
+  void _emitError(
+    Object error,
+    StackTrace stackTrace,
+    PlayerErrorType type,
+  ) {
     if (_disposed) return;
-
-    _safeAddError(PlayerException(message: error.toString(), type: type, error: error, stackTrace: stackTrace));
-
+    _safeAddError(
+      PlayerException(
+        message: error.toString(),
+        type: type,
+        error: error,
+        stackTrace: stackTrace,
+      ),
+    );
     _stateSubject.add(PlayerState.error);
   }
 
   void _safeAddError(PlayerException exception) {
-    if (_disposed) return;
-
-    if (_errorSubject.isClosed) return;
-
+    if (_disposed || _errorSubject.isClosed) return;
     _errorSubject.add(exception);
   }
 
-  // =========================
-  // error type
-  // =========================
-
   PlayerErrorType _mapErrorType(String error) {
     final lower = error.toLowerCase();
-
-    if (lower.contains('network') || lower.contains('timeout') || lower.contains('io')) {
+    if (lower.contains('network') ||
+        lower.contains('timeout') ||
+        lower.contains('io')) {
       return PlayerErrorType.network;
     }
-
-    if (lower.contains('codec') || lower.contains('mediacodec') || lower.contains('decode')) {
+    if (lower.contains('codec') ||
+        lower.contains('mediacodec') ||
+        lower.contains('decode')) {
       return PlayerErrorType.codec;
     }
-
-    if (lower.contains('404') || lower.contains('source') || lower.contains('open')) {
+    if (lower.contains('404') ||
+        lower.contains('source') ||
+        lower.contains('open')) {
       return PlayerErrorType.source;
     }
-
     if (lower.contains('surface') || lower.contains('texture')) {
       return PlayerErrorType.texture;
     }
-
     return PlayerErrorType.native;
   }
 
-  // =========================
-  // widget
-  // =========================
-
   @override
   Widget getVideoWidget() {
-    if (_isAudioOnly) {
-      return const SizedBox.shrink();
-    }
+    if (_isAudioOnly) return const SizedBox.shrink();
     return RepaintBoundary(
       child: Video(
         controller: _controller,
         controls: NoVideoControls,
-        pauseUponEnteringBackgroundMode: !SettingsService.to.app.enableBackgroundPlay.v,
-        resumeUponEnteringForegroundMode: !SettingsService.to.app.enableBackgroundPlay.v,
+        pauseUponEnteringBackgroundMode:
+            !SettingsService.to.app.enableBackgroundPlay.v,
+        resumeUponEnteringForegroundMode:
+            !SettingsService.to.app.enableBackgroundPlay.v,
       ),
     );
   }
 
-  // =========================
-  // play
-  // =========================
-
   @override
-  Future<void> play() async {
-    await _player.play();
+  Future<void> play() {
+    return _enqueue(() async {
+      if (!_disposed) await _player.play();
+    });
   }
 
   @override
-  Future<void> pause() async {
-    await _player.pause();
+  Future<void> pause() {
+    return _enqueue(() async {
+      if (!_disposed) await _player.pause();
+    });
   }
 
   @override
-  Future<void> stop() async {
-    await _player.pause();
-
-    await _player.seek(Duration.zero);
-
-    _stateSubject.add(PlayerState.stopped);
+  Future<void> stop() {
+    ++_sourceGeneration;
+    return _enqueue(() async {
+      if (_disposed) return;
+      await _player.stop();
+      _currentUrl = null;
+      _loadingSubject.add(false);
+      _playingSubject.add(false);
+      _widthSubject.add(null);
+      _heightSubject.add(null);
+      _stateSubject.add(PlayerState.stopped);
+    });
   }
 
   @override
-  Future<void> softStop() async {
-    await _player.setVolume(0.0);
-
-    await _player.pause();
+  Future<void> softStop() {
+    ++_sourceGeneration;
+    return _enqueue(() async {
+      if (_disposed) return;
+      try {
+        await _player.setVolume(0.0);
+        await _player.stop();
+      } finally {
+        _currentUrl = null;
+        _loadingSubject.add(false);
+        _playingSubject.add(false);
+        _widthSubject.add(null);
+        _heightSubject.add(null);
+        _stateSubject.add(PlayerState.idle);
+      }
+    });
   }
 
   @override
-  Future<void> setVolume(double volume) async {
-    final vol = (volume * 100).clamp(0.0, 100.0);
-
-    await _player.setVolume(vol);
+  Future<void> setVolume(double volume) {
+    return _enqueue(() async {
+      if (!_disposed) await _setVolumeInternal(volume);
+    });
   }
 
-  // =========================
-  // applyAudioOnlySettings
-  // =========================
+  Future<void> _setVolumeInternal(double volume) async {
+    final target = (volume * 100).clamp(0.0, 100.0);
+    await _player.setVolume(target);
+  }
 
   Future<void> applyAudioOnlySettings() async {
     final native = _player.platform as dynamic;
@@ -473,46 +451,34 @@ class MediaKitAdapter implements UnifiedPlayer {
     await native.setProperty('audio-display', 'no');
   }
 
-  // =========================
-  // dispose
-  // =========================
-
   @override
-  Future<void> hardDispose() async {
-    if (_disposed) return;
+  Future<void> hardDispose() {
+    ++_sourceGeneration;
+    return _enqueue(() async {
+      if (_disposed) return;
+      _disposed = true;
+      _initialized = false;
+      _listenerBound = false;
 
-    _disposed = true;
+      await _cancelAllSubscriptions();
+      try {
+        await _player.stop();
+      } catch (_) {}
+      try {
+        await _player.dispose();
+      } catch (_) {}
 
-    _initialized = false;
-
-    _listenerBound = false;
-
-    await _cancelAllSubscriptions();
-
-    try {
-      await _player.stop();
-    } catch (_) {}
-
-    await Future.delayed(const Duration(milliseconds: 300));
-
-    try {
-      await _player.dispose();
-    } catch (_) {}
-
-    await Future.wait([
-      _stateSubject.close(),
-      _playingSubject.close(),
-      _loadingSubject.close(),
-      _errorSubject.close(),
-      _completeSubject.close(),
-      _widthSubject.close(),
-      _heightSubject.close(),
-    ]);
+      await Future.wait([
+        _stateSubject.close(),
+        _playingSubject.close(),
+        _loadingSubject.close(),
+        _errorSubject.close(),
+        _completeSubject.close(),
+        _widthSubject.close(),
+        _heightSubject.close(),
+      ]);
+    });
   }
-
-  // =========================
-  // getter
-  // =========================
 
   @override
   bool get isInitialized => _initialized;
