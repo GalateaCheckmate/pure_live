@@ -345,6 +345,7 @@ class BiliBiliSite implements LiveSite {
     try {
       var roomInfo = await getRoomInfo(roomId: roomId);
       var realRoomId = roomInfo["room_info"]["room_id"].toString();
+      final isLive = (asT<int?>(roomInfo["room_info"]["live_status"]) ?? 0) == 1;
       const danmuInfoBaseUrl = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo";
       var danmuInfoUrl = "$danmuInfoBaseUrl?id=$realRoomId";
       var queryParams = await getWbiSign(danmuInfoUrl);
@@ -356,28 +357,30 @@ class BiliBiliSite implements LiveSite {
       List<String> serverHosts = (roomDanmakuResult["data"]["host_list"] as List)
           .map<String>((e) => e["host"].toString())
           .toList();
+      final danmakuArgs = BiliBiliDanmakuArgs(
+        roomId: int.tryParse(realRoomId) ?? 0,
+        uid: userId,
+        token: roomDanmakuResult["data"]["token"].toString(),
+        serverHost: serverHosts.isNotEmpty ? serverHosts.first : "broadcastlv.chat.bilibili.com",
+        buvid: buvid3,
+        cookie: cookie,
+      );
+      final audienceCount = isLive ? await BiliBiliDanmaku.fetchAudienceCount(danmakuArgs) : 0;
       return LiveRoom(
         roomId: roomId,
         title: roomInfo["room_info"]["title"].toString(),
         cover: roomInfo["room_info"]["cover"].toString(),
         nick: roomInfo["anchor_info"]["base_info"]["uname"].toString(),
         avatar: "${roomInfo["anchor_info"]["base_info"]["face"]}@100w.jpg",
-        watching: roomInfo["room_info"]["online"].toString(),
+        watching: (audienceCount ?? 0).toString(),
         area: roomInfo['room_info']?['area_name'] ?? '',
-        status: (asT<int?>(roomInfo["room_info"]["live_status"]) ?? 0) == 1,
-        liveStatus: (asT<int?>(roomInfo["room_info"]["live_status"]) ?? 0) == 1 ? LiveStatus.live : LiveStatus.offline,
+        status: isLive,
+        liveStatus: isLive ? LiveStatus.live : LiveStatus.offline,
         link: "https://live.bilibili.com/$roomId",
         introduction: roomInfo["room_info"]["description"].toString(),
         notice: "",
         platform: Sites.bilibiliSite,
-        danmakuData: BiliBiliDanmakuArgs(
-          roomId: int.tryParse(realRoomId) ?? 0,
-          uid: userId,
-          token: roomDanmakuResult["data"]["token"].toString(),
-          serverHost: serverHosts.isNotEmpty ? serverHosts.first : "broadcastlv.chat.bilibili.com",
-          buvid: buvid3,
-          cookie: cookie,
-        ),
+        danmakuData: danmakuArgs,
       );
     } catch (e) {
       LiveRoom liveRoom =
