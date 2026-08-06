@@ -215,14 +215,21 @@ class _SegmentOutputMetrics {
   });
 
   factory _SegmentOutputMetrics.fromCommand(String command) {
-    final matches = RegExp(r'"([^\"]+%0?\d*d\.ts)"')
-        .allMatches(command)
-        .toList();
-    if (matches.isEmpty) {
+    final outputEnd = command.lastIndexOf('.ts"');
+    if (outputEnd < 0) {
       throw const FormatException('No segmented TS output pattern');
     }
 
-    final outputPattern = matches.last.group(1)!;
+    final outputStart = command.lastIndexOf('"', outputEnd);
+    if (outputStart < 0) {
+      throw const FormatException('Invalid segmented TS output pattern');
+    }
+
+    final outputPattern = command.substring(outputStart + 1, outputEnd + 3);
+    if (!outputPattern.contains('%')) {
+      throw const FormatException('TS output is not segmented');
+    }
+
     final fileName = p.basename(outputPattern);
     final sequenceMarker = fileName.indexOf('%');
     if (sequenceMarker <= 0) {
