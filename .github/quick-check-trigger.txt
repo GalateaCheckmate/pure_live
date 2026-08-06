@@ -1,2 +1,0 @@
-Trigger Windows Quick Check after player, recorder path, and Bilibili audience updates.
-Triggered at 2026-08-06 15:32 +08:00.
