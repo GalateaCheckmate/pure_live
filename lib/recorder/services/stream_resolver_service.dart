@@ -2,17 +2,27 @@ import 'package:pure_live/common/index.dart';
 import 'package:pure_live/model/live_play_quality.dart';
 import 'package:pure_live/player/utils/player_consts.dart';
 
-enum StreamErrorType { roomNotFound, notLive, noQuality, cdnFailed, networkError, loginExpired, banned, unknown }
+enum StreamErrorType {
+  roomNotFound,
+  notLive,
+  noQuality,
+  cdnFailed,
+  networkError,
+  loginExpired,
+  banned,
+  unknown,
+}
 
 class StreamException implements Exception {
   final StreamErrorType type;
-
   final String message;
-
-  /// 是否允许自动重试
   final bool retryable;
 
-  const StreamException({required this.type, required this.message, this.retryable = true});
+  const StreamException({
+    required this.type,
+    required this.message,
+    this.retryable = true,
+  });
 
   @override
   String toString() {
@@ -20,80 +30,129 @@ class StreamException implements Exception {
   }
 }
 
+class ResolvedStreamSet {
+  final List<String> urls;
+  final String preferredQuality;
+
+  const ResolvedStreamSet({
+    required this.urls,
+    required this.preferredQuality,
+  });
+}
+
 class StreamResolverService extends GetxService {
   static StreamResolverService get to => Get.find();
+
   Future<String> resolveStream({
     required String roomId,
     required String platform,
     required String preferredQuality,
   }) async {
+    final result = await resolveStreamCandidates(
+      roomId: roomId,
+      platform: platform,
+      preferredQuality: preferredQuality,
+    );
+    return result.urls.first;
+  }
+
+  Future<ResolvedStreamSet> resolveStreamCandidates({
+    required String roomId,
+    required String platform,
+    required String preferredQuality,
+  }) async {
     try {
-      final detail = await Sites.of(platform).liveSite.getRoomDetail(roomId: roomId, platform: platform);
+      final site = Sites.of(platform).liveSite;
+      final detail = await site.getRoomDetail(
+        roomId: roomId,
+        platform: platform,
+      );
 
-      /// 未开播
       if (detail.liveStatus != LiveStatus.live) {
-        throw StreamException(type: StreamErrorType.notLive, message: i18n("stream_not_live"), retryable: false);
-      }
-
-      List<LivePlayQuality> qualities = [];
-
-      try {
-        qualities = await Sites.of(platform).liveSite.getPlayQualites(detail: detail);
-      } catch (e) {
         throw StreamException(
-          type: StreamErrorType.noQuality,
-          message: i18n("stream_get_quality_failed"),
+          type: StreamErrorType.notLive,
+          message: i18n('stream_not_live'),
           retryable: false,
         );
       }
 
-      /// 无清晰度
+      List<LivePlayQuality> qualities;
+      try {
+        qualities = await site.getPlayQualites(detail: detail);
+      } catch (_) {
+        throw StreamException(
+          type: StreamErrorType.noQuality,
+          message: i18n('stream_get_quality_failed'),
+          retryable: false,
+        );
+      }
+
       if (qualities.isEmpty) {
         throw StreamException(
           type: StreamErrorType.noQuality,
-          message: i18n("stream_no_available_quality"),
+          message: i18n('stream_no_available_quality'),
           retryable: false,
         );
       }
 
-      /// 根据用户目标清晰度排序
-      List<String> systemResolutions = PlayerConsts.resolutions;
-      int preferIndex = systemResolutions.indexOf(preferredQuality);
+      final systemResolutions = PlayerConsts.resolutions;
+      var preferIndex = systemResolutions.indexOf(preferredQuality);
       if (preferIndex == -1) preferIndex = 0;
-      double targetRatio = preferIndex / (systemResolutions.length - 1).clamp(1, 999);
-      final Map<LivePlayQuality, int> originalIndexMap = {for (int i = 0; i < qualities.length; i++) qualities[i]: i};
+      final targetRatio =
+          preferIndex / (systemResolutions.length - 1).clamp(1, 999);
+      final originalIndexMap = <LivePlayQuality, int>{
+        for (var index = 0; index < qualities.length; index++)
+          qualities[index]: index,
+      };
       qualities.sort((a, b) {
-        int indexA = originalIndexMap[a]!;
-        int indexB = originalIndexMap[b]!;
-        double ratioA = indexA / (qualities.length - 1).clamp(1, 999);
-        double ratioB = indexB / (qualities.length - 1).clamp(1, 999);
-        return (ratioA - targetRatio).abs().compareTo((ratioB - targetRatio).abs());
+        final indexA = originalIndexMap[a]!;
+        final indexB = originalIndexMap[b]!;
+        final ratioA = indexA / (qualities.length - 1).clamp(1, 999);
+        final ratioB = indexB / (qualities.length - 1).clamp(1, 999);
+        return (ratioA - targetRatio)
+            .abs()
+            .compareTo((ratioB - targetRatio).abs());
       });
 
-      /// 尝试所有线路
-      for (final q in qualities) {
+      final candidates = <String>[];
+      final seen = <String>{};
+      for (final quality in qualities) {
         try {
-          final urls = await Sites.of(platform).liveSite.getPlayUrls(detail: detail, quality: q);
-
-          if (urls.isNotEmpty) {
-            final url = urls.first;
-            return url;
+          final urls = await site.getPlayUrls(
+            detail: detail,
+            quality: quality,
+          );
+          for (final url in urls) {
+            final normalized = url.trim();
+            if (normalized.isNotEmpty && seen.add(normalized)) {
+              candidates.add(normalized);
+            }
           }
         } catch (_) {
           continue;
         }
       }
 
-      /// 所有线路失败
-      throw StreamException(type: StreamErrorType.cdnFailed, message: i18n("stream_all_cdn_failed"), retryable: true);
-    }
-    /// 已知业务异常
-    on StreamException {
+      if (candidates.isEmpty) {
+        throw StreamException(
+          type: StreamErrorType.cdnFailed,
+          message: i18n('stream_all_cdn_failed'),
+          retryable: true,
+        );
+      }
+
+      return ResolvedStreamSet(
+        urls: List.unmodifiable(candidates),
+        preferredQuality: preferredQuality,
+      );
+    } on StreamException {
       rethrow;
-    }
-    /// 未知异常
-    catch (e) {
-      throw StreamException(type: StreamErrorType.unknown, message: e.toString(), retryable: true);
+    } catch (error) {
+      throw StreamException(
+        type: StreamErrorType.unknown,
+        message: error.toString(),
+        retryable: true,
+      );
     }
   }
 }
