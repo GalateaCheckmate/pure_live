@@ -17,18 +17,12 @@ class FavoriteRoomController extends GetxController {
     },
   );
 
-  final Rx<List<LiveArea>> favoriteAreas = hiveObject(
-    'favoriteAreas',
-    <LiveArea>[],
-    fromJson: (json) {
-      return List<LiveArea>.from((json['list'] ?? []).map((e) => LiveArea.fromJson(e)));
-    },
-    toJson: (list) {
-      return {'list': list.map((e) => e.toJson()).toList()};
-    },
-  );
+  bool _isSameRoom(LiveRoom first, LiveRoom second) {
+    return first.roomId == second.roomId &&
+        first.platform?.toUpperCase() == second.platform?.toUpperCase();
+  }
 
-  bool isFavorite(LiveRoom room) => favoriteRooms.v.any((e) => e.roomId == room.roomId);
+  bool isFavorite(LiveRoom room) => favoriteRooms.v.any((e) => _isSameRoom(e, room));
   bool isFavoriteArea(LiveArea area) => favoriteAreas.v.any((e) => e.areaId == area.areaId);
 
   bool addRoom(LiveRoom room) {
@@ -39,13 +33,15 @@ class FavoriteRoomController extends GetxController {
   }
 
   bool removeRoom(LiveRoom room) {
-    final res = favoriteRooms.v.remove(room);
+    final idx = favoriteRooms.v.indexWhere((e) => _isSameRoom(e, room));
+    if (idx == -1) return false;
+    favoriteRooms.v.removeAt(idx);
     favoriteRooms.refresh();
-    return res;
+    return true;
   }
 
   bool updateRoom(LiveRoom room) {
-    final idx = favoriteRooms.v.indexWhere((e) => e.roomId == room.roomId);
+    final idx = favoriteRooms.v.indexWhere((e) => _isSameRoom(e, room));
     if (idx == -1) return false;
     favoriteRooms.v[idx] = room;
     favoriteRooms.refresh();
@@ -70,7 +66,7 @@ class FavoriteRoomController extends GetxController {
 
   LiveRoom? getRoomById(String roomId, String platform) {
     for (final room in favoriteRooms.v) {
-      if (room.roomId == roomId && room.platform == platform) {
+      if (room.roomId == roomId && room.platform?.toUpperCase() == platform.toUpperCase()) {
         return room;
       }
     }
