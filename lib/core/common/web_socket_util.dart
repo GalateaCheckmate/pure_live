@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:io';
+
+import 'package:pure_live/common/services/settings_service.dart';
 import 'package:web_socket_channel/io.dart';
 
 enum SocketStatus { connected, failed, closed }
@@ -44,6 +47,7 @@ class WebScoketUtils {
     this.backupUrl,
   });
   IOWebSocketChannel? webSocket;
+  HttpClient? _httpClient;
   Timer? heartBeatTimer;
 
   /// 重连次数
@@ -55,6 +59,29 @@ class WebScoketUtils {
 
   StreamSubscription<dynamic>? streamSubscription;
 
+  HttpClient _createHttpClient() {
+    final client = HttpClient();
+    client.findProxy = (uri) {
+      try {
+        final proxy = SettingsService.to.proxy;
+        final host = proxy.appProxyHost.value.trim();
+        final port = proxy.appProxyPort.value;
+        if (proxy.enableAppProxy.value &&
+            host.isNotEmpty &&
+            port > 0 &&
+            port <= 65535) {
+          return 'PROXY $host:$port';
+        }
+      } catch (_) {
+        // Settings may be unavailable during very early startup. In that case,
+        // keep danmaku connections independent from stale environment proxies.
+      }
+      return 'DIRECT';
+    };
+    return client;
+  }
+
+  /// 连接
   void connect({bool retry = false}) async {
     close();
     try {
@@ -62,11 +89,19 @@ class WebScoketUtils {
       if (backupUrl != null && backupUrl!.isNotEmpty && retry) {
         wsurl = backupUrl!;
       }
-      webSocket = IOWebSocketChannel.connect(wsurl, connectTimeout: const Duration(seconds: 10), headers: headers);
+      _httpClient = _createHttpClient();
+      webSocket = IOWebSocketChannel.connect(
+        wsurl,
+        connectTimeout: const Duration(seconds: 10),
+        headers: headers,
+        customClient: _httpClient,
+      );
 
       await webSocket?.ready;
       ready();
     } catch (e) {
+      _httpClient?.close(force: true);
+      _httpClient = null;
       if (!retry) {
         connect(retry: true);
         return;
@@ -90,13 +125,15 @@ class WebScoketUtils {
   }
 
   void initHeartBeat() {
-    heartBeatTimer = Timer.periodic(Duration(milliseconds: heartBeatTime), (timer) {
+    heartBeatTimer = Timer.periodic(Duration(milliseconds: heartBeatTime), (
+      timer,
+    ) {
       onHeartBeat?.call();
     });
   }
 
   void receiveMessage(dynamic data) {
-    //接受到一条信息才算重连成功
+    // 接受到一条信息才算重连成功
     reconnectTime = 0;
     onMessage?.call(data);
   }
@@ -124,11 +161,16 @@ class WebScoketUtils {
     status = SocketStatus.closed;
 
     streamSubscription?.cancel();
+    streamSubscription = null;
 
     reconnectTimer?.cancel();
     reconnectTimer = null;
 
     webSocket?.sink.close();
+    webSocket = null;
+
+    _httpClient?.close(force: false);
+    _httpClient = null;
 
     heartBeatTimer?.cancel();
     heartBeatTimer = null;
@@ -142,7 +184,7 @@ class WebScoketUtils {
         connect();
       });
     } else {
-      onClose?.call("重连超过最大次数，与服务器断开连接");
+      onClose?.call('重连超过最大次数，与服务器断开连接');
       reconnectTimer?.cancel();
       reconnectTimer = null;
       close();
