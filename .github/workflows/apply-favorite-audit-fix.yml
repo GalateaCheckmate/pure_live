@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: apply-favorite-audit-fix
+  cancel-in-progress: true
+
 jobs:
   apply-fix:
     runs-on: ubuntu-latest
@@ -22,7 +26,7 @@ jobs:
           fetch-depth: 0
 
       - name: Apply audited favorite fixes
-        run: python tool/apply_favorite_audit_fix.py
+        run: python tool/run_favorite_audit_fix.py
 
       - name: Verify patch shape
         shell: bash
