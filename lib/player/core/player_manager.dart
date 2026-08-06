@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:async';
 import 'dart:developer';
 import 'player_pool.dart';
@@ -7,19 +6,15 @@ import '../models/player_state.dart';
 import 'preload_player_manager.dart';
 import '../models/player_engine.dart';
 import 'engine_fallback_manager.dart';
-import 'package:floating/floating.dart';
 import '../models/player_exception.dart';
 import 'package:remixicon/remixicon.dart';
 import '../models/player_error_type.dart';
 import 'package:rxdart/rxdart.dart' hide Rx;
 import 'package:pure_live/common/index.dart';
 import '../interface/unified_player_interface.dart';
-import 'package:pure_live/routes/app_navigation.dart';
 import 'package:pure_live/player/utils/fullscreen.dart';
-import 'package:flutter_floating/flutter_floating.dart';
 import 'package:pure_live/player/utils/player_consts.dart';
 import 'package:pure_live/recorder/ffmpeg/ffmpeg_types.dart';
-import 'package:pure_live/common/global/platform_utils.dart';
 import 'package:pure_live/player/utils/pip_window_widget.dart';
 import 'package:pure_live/modules/live_play/player_state.dart';
 import 'package:pure_live/player/core/live_audio_service.dart';
@@ -46,6 +41,7 @@ class PlayerManager {
   }) {
     _pipStateSubscription = isInPip.listen((value) {
       GlobalPlayerState.to.isPipMode.value = value;
+      isFloating.value = value;
     });
   }
 
@@ -66,7 +62,7 @@ class PlayerManager {
   final RxBool isFloating = false.obs;
   final RxBool isHovered = false.obs;
   final RxInt videoFitIndex = 0.obs;
-  Rx<ValueKey> videoKey = Rx<ValueKey>(const ValueKey("video_0"));
+  Rx<ValueKey> videoKey = Rx<ValueKey>(const ValueKey('video_0'));
 
   final _stateSubject = BehaviorSubject<PlayerState>.seeded(PlayerState.idle);
   final _playingSubject = BehaviorSubject<bool>.seeded(false);
@@ -77,15 +73,11 @@ class PlayerManager {
   final _heightSubject = BehaviorSubject<int?>.seeded(null);
 
   final List<StreamSubscription> _subscriptions = [];
-  StreamSubscription<PiPStatus>? _pipSubscription;
   StreamSubscription<bool>? _pipStateSubscription;
 
   bool _disposed = false;
   bool _isSwitchingDueToFallback = false;
   bool _isHandlingError = false;
-  static const String _floatTag = "global_video_player";
-  Timer? _hideTimer;
-  late Floating floating;
   LiveRoom? currentFloatRoom;
 
   UnifiedPlayer? get currentPlayer => _currentPlayer;
@@ -116,13 +108,6 @@ class PlayerManager {
       _currentPlayer = await playerPool.getPlayer(engine, audioOnly: audioOnly);
       await _bindPlayerStreams(_currentPlayer!);
       LiveAudioService.setPlayer(_currentPlayer!);
-      if (Platform.isAndroid) {
-        floating = Floating();
-        await _pipSubscription?.cancel();
-        _pipSubscription = floating.pipStatusStream.listen((status) {
-          isInPip.value = status == PiPStatus.enabled;
-        });
-      }
       isInitialized.value = true;
       _stateSubject.add(PlayerState.initialized);
     } catch (e, s) {
@@ -168,8 +153,8 @@ class PlayerManager {
         _runtimeEngine = null;
       }
 
-      final String savedKey = SettingsService.to.player.videoPlayerKey.v;
-      final String validKey = PlayerConsts.engines.containsKey(savedKey) ? savedKey : PlayerConsts.defaultKey;
+      final savedKey = SettingsService.to.player.videoPlayerKey.v;
+      final validKey = PlayerConsts.engines.containsKey(savedKey) ? savedKey : PlayerConsts.defaultKey;
       _defaultEngine = PlayerConsts.engines[validKey]!;
       _runtimeEngine = _defaultEngine;
       log(
@@ -197,7 +182,7 @@ class PlayerManager {
       audioLoader.startAudioStream(
         remoteStreamUrl: url,
         uniqueId: room!.roomId!,
-        platform: room.platform ?? "",
+        platform: room.platform ?? '',
         onAudioReady: (audioPipePath) {
           if (!completer.isCompleted) completer.complete(audioPipePath);
         },
@@ -239,9 +224,9 @@ class PlayerManager {
       LiveAudioService.setPlayer(player);
       final roomId = room?.roomId;
       if (roomId != null) {
-        await LiveAudioService.start(roomId, room?.nick ?? "", room?.title ?? "", room?.avatar);
+        await LiveAudioService.start(roomId, room?.nick ?? '', room?.title ?? '', room?.avatar);
       }
-      videoKey.value = ValueKey("video_${DateTime.now().microsecondsSinceEpoch}");
+      videoKey.value = ValueKey('video_${DateTime.now().microsecondsSinceEpoch}');
       _stateSubject.add(PlayerState.ready);
     } on PlayerException catch (e) {
       if (!_isHandlingError && _isSessionValid(mySessionId)) {
@@ -291,7 +276,7 @@ class PlayerManager {
       if (oldEngine != null) {
         await _safeDestroyPlayer(oldEngine, audioOnly: oldAudioOnly);
       }
-      videoKey.value = ValueKey("video_${DateTime.now().microsecondsSinceEpoch}");
+      videoKey.value = ValueKey('video_${DateTime.now().microsecondsSinceEpoch}');
     } catch (e, s) {
       final exception = PlayerException(
         message: 'Switch engine failed',
@@ -308,7 +293,7 @@ class PlayerManager {
     try {
       await playerPool.removeFromCache(engine, audioOnly: audioOnly);
     } catch (e, s) {
-      log("destroy player error: $e", stackTrace: s);
+      log('destroy player error: $e', stackTrace: s);
     }
   }
 
@@ -337,8 +322,8 @@ class PlayerManager {
     }
   }
 
-  Future<void> pause() async => await _currentPlayer?.pause();
-  Future<void> resume() async => await _currentPlayer?.play();
+  Future<void> pause() async => _currentPlayer?.pause();
+  Future<void> resume() async => _currentPlayer?.play();
 
   Future<void> stop() async {
     await close();
@@ -352,158 +337,26 @@ class PlayerManager {
   void changeVideoFit(int index) => videoFitIndex.value = index;
 
   Future<void> enablePip() async {
-    if (PlatformUtils.isAndroid) {
-      final status = await floating.pipStatus;
-      if (status == PiPStatus.disabled) {
-        final rational = isVerticalVideo.value ? Rational.vertical() : Rational.landscape();
-        await floating.enable(ImmediatePiP(aspectRatio: rational));
-      }
-    } else if (Platform.isWindows) {
-      await WindowService().enterWinPiP(currentVideoRatio);
-      isInPip.value = true;
-    }
+    await WindowService().enterWinPiP(currentVideoRatio);
+    isInPip.value = true;
   }
 
   Future<void> exitPip() async {
-    if (Platform.isWindows) {
-      await WindowService().exitWinPiP();
-      GlobalPlayerState.to.reset();
-      isInPip.value = false;
-    }
+    await WindowService().exitWinPiP();
+    GlobalPlayerState.to.reset();
+    isInPip.value = false;
   }
 
   void showAppFloating() {
-    floatingManager.disposeFloating(_floatTag);
-    _hideTimer?.cancel();
-    double maxSide = Platform.isWindows ? 350 : 220;
-    double ratio = currentVideoRatio;
-    double floatWidth;
-    double floatHeight;
-    if (ratio >= 1) {
-      floatWidth = maxSide;
-      floatHeight = maxSide / ratio;
-    } else {
-      floatHeight = maxSide * 1.2;
-      floatWidth = floatHeight * ratio;
-      if (floatWidth < 120) {
-        floatWidth = 120;
-        floatHeight = floatWidth / ratio;
-      }
-    }
-
-    void resetHideTimer() {
-      if (Platform.isAndroid || Platform.isIOS) {
-        _hideTimer?.cancel();
-        _hideTimer = Timer(const Duration(seconds: 3), () {
-          isHovered.value = false;
-        });
-      }
-    }
-
-    floatingManager.createFloating(
-      _floatTag,
-      FloatingOverlay(
-        MouseRegion(
-          onEnter: (_) {
-            if (Platform.isWindows || Platform.isMacOS) isHovered.value = true;
-          },
-          onExit: (_) {
-            if (Platform.isWindows || Platform.isMacOS) isHovered.value = false;
-          },
-          child: Container(
-            width: floatWidth,
-            height: floatHeight,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), color: Colors.black),
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: getVideoWidget(videoFitIndex.value, fitList: SettingsService.to.player.videoFitArray),
-                ),
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      closeAppFloating();
-                      if (currentFloatRoom != null) {
-                        AppNavigator.toLiveRoomDetail(liveRoom: currentFloatRoom!);
-                      }
-                    },
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-                Center(
-                  child: AnimatedOpacity(
-                    opacity: isHovered.value ? 1 : 0,
-                    duration: const Duration(milliseconds: 200),
-                    child: IgnorePointer(
-                      ignoring: !isHovered.value,
-                      child: StreamBuilder<bool>(
-                        stream: onPlaying,
-                        initialData: isPlayingNow,
-                        builder: (context, snapshot) {
-                          var isPlay = snapshot.data ?? true;
-                          return IconButton(
-                            iconSize: 42,
-                            style: IconButton.styleFrom(backgroundColor: Colors.black45),
-                            icon: Icon(
-                              isPlay ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                              color: Colors.white,
-                            ),
-                            onPressed: () {
-                              togglePlayPause();
-                              resetHideTimer();
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  right: 4,
-                  top: 4,
-                  child: Obx(
-                    () => AnimatedOpacity(
-                      opacity: isHovered.value ? 1 : 0,
-                      duration: const Duration(milliseconds: 200),
-                      child: IgnorePointer(
-                        ignoring: !isHovered.value,
-                        child: IconButton(
-                          constraints: const BoxConstraints(),
-                          padding: const EdgeInsets.all(4),
-                          style: IconButton.styleFrom(backgroundColor: Colors.black45),
-                          icon: const Icon(Icons.close, color: Colors.white, size: 20),
-                          onPressed: () async {
-                            await stop();
-                          },
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        right: 50,
-        top: 100,
-        slideType: FloatingEdgeType.onRightAndTop,
-        params: FloatingParams(isSnapToEdge: false, snapToEdgeSpace: 10, dragOpacity: 0.8),
-      ),
-    );
-    floatingManager.getFloating(_floatTag).open(Get.context!);
+    if (isInPip.value) return;
     isFloating.value = true;
-    if (Platform.isAndroid || Platform.isIOS) {
-      isHovered.value = true;
-      resetHideTimer();
-    }
+    unawaited(enablePip());
   }
 
   void closeAppFloating() {
-    if (!isFloating.value) return;
-    floatingManager.disposeFloating(_floatTag);
+    if (!isFloating.value && !isInPip.value) return;
     isFloating.value = false;
+    unawaited(exitPip());
   }
 
   Widget buildPiPOverlay() {
@@ -534,7 +387,7 @@ class PlayerManager {
                       stream: onPlaying,
                       initialData: isPlayingNow,
                       builder: (context, snapshot) {
-                        var isPlay = snapshot.data ?? true;
+                        final isPlay = snapshot.data ?? true;
                         return IconButton(
                           iconSize: 42,
                           style: IconButton.styleFrom(backgroundColor: Colors.black45),
@@ -542,9 +395,7 @@ class PlayerManager {
                             isPlay ? Icons.pause_circle_filled : Icons.play_circle_filled,
                             color: Colors.white,
                           ),
-                          onPressed: () {
-                            togglePlayPause();
-                          },
+                          onPressed: togglePlayPause,
                         );
                       },
                     ),
@@ -560,9 +411,7 @@ class PlayerManager {
                     duration: const Duration(milliseconds: 200),
                     child: IconButton(
                       icon: const Icon(Icons.close, color: Colors.white),
-                      onPressed: () async {
-                        await exitPip();
-                      },
+                      onPressed: exitPip,
                     ),
                   ),
                 ),
@@ -686,7 +535,7 @@ class PlayerManager {
                         ),
                         SizedBox(width: compact ? 4 : 8),
                         Text(
-                          i18n("audio_only_mode"),
+                          i18n('audio_only_mode'),
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: badgeTextSize,
@@ -707,11 +556,11 @@ class PlayerManager {
   }
 
   Widget getVideoWidget(int fitIndex, {Widget? controls, required List<BoxFit> fitList}) {
-    final LivePlayController livePlayController = Get.find<LivePlayController>();
+    final livePlayController = Get.find<LivePlayController>();
     return PureLivePipWidget(
       child: Container(
         color: Colors.black,
-        padding: const EdgeInsets.all(0),
+        padding: EdgeInsets.zero,
         child: StreamBuilder<bool>(
           stream: onPlaying,
           initialData: isPlayingNow,
@@ -721,7 +570,7 @@ class PlayerManager {
             }
             final safeFitIndex = fitIndex.clamp(0, fitList.length - 1).toInt();
             final boxFit = fitList[safeFitIndex];
-            final content = KeyedSubtree(
+            return KeyedSubtree(
               key: videoKey.value,
               child: Container(
                 color: Colors.black,
@@ -741,9 +590,13 @@ class PlayerManager {
                             child: StreamBuilder<List<int?>>(
                               stream: CombineLatestStream.list([width, height]),
                               builder: (context, snapshot) {
-                                final vW = snapshot.data?[0]?.toDouble() ?? 1920.0;
-                                final vH = snapshot.data?[1]?.toDouble() ?? 1080.0;
-                                return SizedBox(width: vW, height: vH, child: _currentPlayer!.getVideoWidget());
+                                final videoWidth = snapshot.data?[0]?.toDouble() ?? 1920.0;
+                                final videoHeight = snapshot.data?[1]?.toDouble() ?? 1080.0;
+                                return SizedBox(
+                                  width: videoWidth,
+                                  height: videoHeight,
+                                  child: _currentPlayer!.getVideoWidget(),
+                                );
                               },
                             ),
                           ),
@@ -754,10 +607,6 @@ class PlayerManager {
                 ),
               ),
             );
-            if (!Platform.isAndroid) {
-              return content;
-            }
-            return PiPSwitcher(floating: floating, childWhenEnabled: content, childWhenDisabled: content);
           },
         ),
       ),
@@ -767,7 +616,12 @@ class PlayerManager {
   Widget _buildPlaceholder() {
     return Container(
       color: Colors.black,
-      child: AppStatusView(type: AppStatusType.loading, title: "", subtitle: "", iconColor: Colors.white),
+      child: AppStatusView(
+        type: AppStatusType.loading,
+        title: '',
+        subtitle: '',
+        iconColor: Colors.white,
+      ),
     );
   }
 
@@ -833,14 +687,12 @@ class PlayerManager {
     isInitialized.value = false;
   }
 
-  Future<void> retry() async {
-    await replay();
-  }
+  Future<void> retry() => replay();
 
   Future<void> _handleError(PlayerException error, {int? sessionId}) async {
     if (_disposed || _isClosing) return;
     if (_isHandlingError) {
-      log("skip duplicated error handling: ${error.message}");
+      log('skip duplicated error handling: ${error.message}');
       return;
     }
     final mySessionId = sessionId ?? _sessionId;
@@ -859,12 +711,12 @@ class PlayerManager {
           _currentPlayUrls.length > 1) {
         lineManager.markFailed(failedUrl);
         if (!lineManager.hasAvailable(_currentPlayUrls)) {
-          log("no available lines, fallback engine");
+          log('no available lines, fallback engine');
         } else {
           final nextLine = lineManager.next(_currentPlayUrls);
           if (nextLine != failedUrl) {
             lineSwitched = true;
-            log("switch line => $nextLine");
+            log('switch line => $nextLine');
             await Future.delayed(const Duration(seconds: 2));
             if (!_isSessionValid(mySessionId)) return;
             await play(
@@ -884,10 +736,10 @@ class PlayerManager {
       if (!lineSwitched && runtimeEngine != null && fallbackManager.shouldFallback(error)) {
         final nextEngine = await fallbackManager.fallback(runtimeEngine, error);
         if (nextEngine == runtimeEngine) {
-          log("skip fallback: nextEngine(${nextEngine.name}) == currentEngine(${runtimeEngine.name})");
+          log('skip fallback: nextEngine(${nextEngine.name}) == currentEngine(${runtimeEngine.name})');
           return;
         }
-        log("fallback engine: ${runtimeEngine.name} -> ${nextEngine.name}");
+        log('fallback engine: ${runtimeEngine.name} -> ${nextEngine.name}');
         _isSwitchingDueToFallback = true;
         await Future.delayed(const Duration(milliseconds: 1200));
         if (!_isSessionValid(mySessionId)) return;
@@ -895,10 +747,9 @@ class PlayerManager {
         await Future.delayed(const Duration(milliseconds: 500));
         if (!_isSessionValid(mySessionId)) return;
         await replay();
-        return;
       }
     } catch (e, s) {
-      log("_handleError failed: $e", stackTrace: s);
+      log('_handleError failed: $e', stackTrace: s);
     } finally {
       _isHandlingError = false;
     }
@@ -928,16 +779,8 @@ class PlayerManager {
         }
       }),
     );
-    _subscriptions.add(
-      player.onComplete.listen((event) {
-        _completeSubject.add(event);
-      }),
-    );
-    _subscriptions.add(
-      player.onStateChanged.listen((event) {
-        _stateSubject.add(event);
-      }),
-    );
+    _subscriptions.add(player.onComplete.listen(_completeSubject.add));
+    _subscriptions.add(player.onStateChanged.listen(_stateSubject.add));
     _subscriptions.add(
       player.onError.listen((error) {
         if (!_isHandlingError) {
@@ -945,21 +788,13 @@ class PlayerManager {
         }
       }),
     );
-    _subscriptions.add(
-      player.width.listen((event) {
-        _widthSubject.add(event);
-      }),
-    );
-    _subscriptions.add(
-      player.height.listen((event) {
-        _heightSubject.add(event);
-      }),
-    );
+    _subscriptions.add(player.width.listen(_widthSubject.add));
+    _subscriptions.add(player.height.listen(_heightSubject.add));
     _subscriptions.add(
       CombineLatestStream.combine2<int?, int?, bool>(
-        width.where((w) => w != null && w > 0),
-        height.where((h) => h != null && h > 0),
-        (w, h) => h! >= w!,
+        width.where((value) => value != null && value > 0),
+        height.where((value) => value != null && value > 0),
+        (videoWidth, videoHeight) => videoHeight! >= videoWidth!,
       ).distinct().listen((event) {
         isVerticalVideo.value = event;
       }),
@@ -979,9 +814,7 @@ class PlayerManager {
     _disposed = true;
     _sessionId++;
     _isClosing = true;
-    _hideTimer?.cancel();
     closeAppFloating();
-    await _pipSubscription?.cancel();
     await _pipStateSubscription?.cancel();
     await _clearSubscriptions();
     audioLoader.stop();
