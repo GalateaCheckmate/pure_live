@@ -34,10 +34,10 @@ class WindowService {
   Future<void> doExitFullScreen() => doExitWindowFullScreen();
 
   Future<void> doExitWindowFullScreen() async {
-    await FullScreenWindow.setFullScreen(false);
+    FullScreenWindow.setFullScreen(false);
   }
 
   Future<void> doEnterWindowFullScreen({bool enableEscListener = true, VoidCallback? onEsc}) async {
-    await FullScreenWindow.setFullScreen(true);
+    FullScreenWindow.setFullScreen(true);
   }
 }
