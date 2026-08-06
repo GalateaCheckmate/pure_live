@@ -84,11 +84,7 @@ class BackButtonObserver extends RouteObserver<PageRoute<dynamic>> {
         });
       } else {
         livePlayController.videoController.value?.clearListener();
-        if (livePlayController.isCurrentRoomAudioOnly.value) {
-          unawaited(manager.hardDispose());
-        } else {
-          unawaited(manager.close());
-        }
+        unawaited(manager.close());
       }
 
       if (PlatformUtils.isMobile) {
