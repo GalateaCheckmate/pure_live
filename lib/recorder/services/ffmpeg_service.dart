@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:developer';
+import 'dart:io';
+
+import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 import 'package:pure_live/plugins/locale_helper.dart';
 import 'package:pure_live/recorder/ffmpeg/ffmpeg_event.dart';
 import 'package:pure_live/recorder/ffmpeg/ffmpeg_types.dart';
-import 'package:ffmpeg_kit_extended_flutter/ffmpeg_kit_extended_flutter.dart';
 
 class FFmpegRecordSession {
   final String taskId;
@@ -44,6 +47,7 @@ class FFmpegService {
       throw StateError('FFmpeg session already active for task $taskId');
     }
 
+    final outputMetrics = _SegmentOutputMetrics.fromCommand(command);
     final ffmpegSession = FFmpegKit.createSession(command);
     final session = FFmpegRecordSession(taskId: taskId, operationId: operationId)
       ..session = ffmpegSession
@@ -59,13 +63,21 @@ class FFmpegService {
     );
 
     ffmpegSession.setStatisticsCallback((statistics) {
+      final now = DateTime.now();
+      final measured = outputMetrics?.measure(now);
+      final measuredSize = measured?.bytes ?? 0;
+      final measuredBitrate = measured?.bitrateKbps ?? 0;
+      final actualSize = measuredSize > 0 ? measuredSize : statistics.size;
+      final actualBitrate =
+          measuredBitrate > 0 ? measuredBitrate : statistics.bitrate;
+
       session
         ..recordedSeconds = statistics.time ~/ 1000
-        ..fileSize = statistics.size
-        ..bitrate = statistics.bitrate
+        ..fileSize = actualSize
+        ..bitrate = actualBitrate
         ..speed = statistics.speed
         ..fps = statistics.videoFps
-        ..lastUpdate = DateTime.now();
+        ..lastUpdate = now;
 
       onEvent(
         FFmpegEvent(
@@ -74,8 +86,8 @@ class FFmpegService {
           type: FFmpegEventType.progress,
           data: {
             'time': statistics.time,
-            'size': statistics.size,
-            'bitrate': statistics.bitrate,
+            'size': actualSize,
+            'bitrate': actualBitrate,
             'speed': statistics.speed,
             'fps': statistics.videoFps,
           },
@@ -106,14 +118,19 @@ class FFmpegService {
           final lowerLogs = logs.toLowerCase();
           eventData['raw_logs'] = lowerLogs;
 
-          if (code == -2 || lowerLogs.contains('no such file') || lowerLogs.contains('permission denied')) {
+          if (code == -2 ||
+              lowerLogs.contains('no such file') ||
+              lowerLogs.contains('permission denied')) {
             userFriendlyMessage = i18n('path_or_permission_error');
             eventData['retryable'] = false;
-          } else if (lowerLogs.contains('server returned 404') || lowerLogs.contains('http error 404')) {
+          } else if (lowerLogs.contains('server returned 404') ||
+              lowerLogs.contains('http error 404')) {
             userFriendlyMessage = i18n('url_expired_404');
-          } else if (lowerLogs.contains('server returned 403') || lowerLogs.contains('http error 403')) {
+          } else if (lowerLogs.contains('server returned 403') ||
+              lowerLogs.contains('http error 403')) {
             userFriendlyMessage = i18n('url_forbidden_403');
-          } else if (lowerLogs.contains('connection timed out') || lowerLogs.contains('timed out')) {
+          } else if (lowerLogs.contains('connection timed out') ||
+              lowerLogs.contains('timed out')) {
             userFriendlyMessage = i18n('timeout');
           } else if (lowerLogs.contains('invalid argument')) {
             userFriendlyMessage = i18n('param_error');
@@ -123,7 +140,10 @@ class FFmpegService {
             eventData['retryable'] = false;
           } else if (logs.trim().isNotEmpty) {
             final lastLogLine = logs.trim().split('\n').last;
-            userFriendlyMessage = i18n('unknown_error', args: {'error_log': lastLogLine});
+            userFriendlyMessage = i18n(
+              'unknown_error',
+              args: {'error_log': lastLogLine},
+            );
           }
         } catch (error) {
           log('解析 FFmpeg 日志时发生异常: $error');
@@ -135,7 +155,9 @@ class FFmpegService {
         FFmpegEvent(
           taskId: taskId,
           operationId: operationId,
-          type: isNormalExit ? FFmpegEventType.complete : FFmpegEventType.error,
+          type: isNormalExit
+              ? FFmpegEventType.complete
+              : FFmpegEventType.error,
           data: eventData,
         ),
       );
@@ -175,4 +197,104 @@ class FFmpegService {
     if (session == null) return false;
     return operationId == null || session.operationId == operationId;
   }
+}
+
+class _SegmentOutputMetrics {
+  static const Duration _minimumSampleInterval = Duration(milliseconds: 900);
+
+  final Directory directory;
+  final String filePrefix;
+
+  DateTime? _lastSampleAt;
+  int _lastBytes = 0;
+  _MeasuredOutput _cached = const _MeasuredOutput(bytes: 0, bitrateKbps: 0);
+
+  _SegmentOutputMetrics({
+    required this.directory,
+    required this.filePrefix,
+  });
+
+  factory _SegmentOutputMetrics.fromCommand(String command) {
+    final matches = RegExp(r'"([^\"]+%0?\d*d\.ts)"').allMatches(command).toList();
+    if (matches.isEmpty) {
+      throw const FormatException('No segmented TS output pattern');
+    }
+
+    final outputPattern = matches.last.group(1)!;
+    final fileName = p.basename(outputPattern);
+    final sequenceMarker = fileName.indexOf('%');
+    if (sequenceMarker <= 0) {
+      throw const FormatException('Invalid segmented TS output pattern');
+    }
+
+    return _SegmentOutputMetrics(
+      directory: Directory(p.dirname(outputPattern)),
+      filePrefix: fileName.substring(0, sequenceMarker),
+    );
+  }
+
+  static _SegmentOutputMetrics? fromCommandOrNull(String command) {
+    try {
+      return _SegmentOutputMetrics.fromCommand(command);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _MeasuredOutput measure(DateTime now) {
+    final previousSampleAt = _lastSampleAt;
+    if (previousSampleAt != null &&
+        now.difference(previousSampleAt) < _minimumSampleInterval) {
+      return _cached;
+    }
+
+    var totalBytes = 0;
+    try {
+      if (directory.existsSync()) {
+        for (final entity in directory.listSync(followLinks: false)) {
+          if (entity is! File) continue;
+          final name = p.basename(entity.path);
+          if (!name.startsWith(filePrefix) || !name.endsWith('.ts')) {
+            continue;
+          }
+          try {
+            totalBytes += entity.lengthSync();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      return _cached;
+    }
+
+    var bitrateKbps = _cached.bitrateKbps;
+    if (previousSampleAt != null && totalBytes >= _lastBytes) {
+      final elapsedSeconds =
+          now.difference(previousSampleAt).inMicroseconds / 1000000;
+      final deltaBytes = totalBytes - _lastBytes;
+      if (elapsedSeconds > 0 && deltaBytes > 0) {
+        final instantKbps = deltaBytes * 8 / elapsedSeconds / 1000;
+        bitrateKbps = bitrateKbps <= 0
+            ? instantKbps
+            : bitrateKbps * 0.65 + instantKbps * 0.35;
+      }
+    }
+
+    _lastSampleAt = now;
+    _lastBytes = totalBytes;
+    _cached = _MeasuredOutput(
+      bytes: totalBytes,
+      bitrateKbps: bitrateKbps,
+    );
+    return _cached;
+  }
+}
+
+class _MeasuredOutput {
+  final int bytes;
+  final double bitrateKbps;
+
+  const _MeasuredOutput({
+    required this.bytes,
+    required this.bitrateKbps,
+  });
 }
