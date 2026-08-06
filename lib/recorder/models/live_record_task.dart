@@ -128,6 +128,10 @@ class LiveRecordTask {
     fps = 0;
     lastFrame = 0;
     lastUpdate = now;
+    currentUrl = null;
+    selectedLine = null;
+    selectedQuality = null;
+    outputDir = null;
   }
 
   void beginRecordingSession() {
@@ -235,42 +239,42 @@ class LiveRecordTask {
   }
 
   Map<String, dynamic> toJson() => {
-    'taskId': taskId,
-    'roomId': roomId,
-    'platform': platform,
-    'title': title,
-    'nick': nick,
-    'avatar': avatar,
-    'cover': cover,
-    'watching': watching,
-    'followers': followers,
-    'isRecord': isRecord,
-    'liveStatus': liveStatus.index,
-    'currentUrl': currentUrl,
-    'selectedLine': selectedLine,
-    'selectedQuality': selectedQuality,
-    'outputDir': outputDir,
-    'recordedSeconds': recordedSeconds,
-    'fileSize': fileSize,
-    'recordSpeed': recordSpeed,
-    'bitrate': bitrate,
-    'fps': fps,
-    'lastFrame': lastFrame,
-    'lastUpdate': lastUpdate?.toIso8601String(),
-    'recordingStartedAt': recordingStartedAt?.toIso8601String(),
-    'recordingBatchId': recordingBatchId,
-    'recordingSessionIndex': recordingSessionIndex,
-    'accumulatedSeconds': accumulatedSeconds,
-    'currentSessionSeconds': currentSessionSeconds,
-    'accumulatedFileSize': accumulatedFileSize,
-    'currentSessionFileSize': currentSessionFileSize,
-    'status': status.index,
-    'autoReconnect': autoReconnect,
-    'retryCount': retryCount,
-    'createTime': createTime.toIso8601String(),
-    'lastFailTime': lastFailTime?.toIso8601String(),
-    'wasStoppedByUser': wasStoppedByUser,
-  };
+        'taskId': taskId,
+        'roomId': roomId,
+        'platform': platform,
+        'title': title,
+        'nick': nick,
+        'avatar': avatar,
+        'cover': cover,
+        'watching': watching,
+        'followers': followers,
+        'isRecord': isRecord,
+        'liveStatus': liveStatus.index,
+        'currentUrl': currentUrl,
+        'selectedLine': selectedLine,
+        'selectedQuality': selectedQuality,
+        'outputDir': outputDir,
+        'recordedSeconds': recordedSeconds,
+        'fileSize': fileSize,
+        'recordSpeed': recordSpeed,
+        'bitrate': bitrate,
+        'fps': fps,
+        'lastFrame': lastFrame,
+        'lastUpdate': lastUpdate?.toIso8601String(),
+        'recordingStartedAt': recordingStartedAt?.toIso8601String(),
+        'recordingBatchId': recordingBatchId,
+        'recordingSessionIndex': recordingSessionIndex,
+        'accumulatedSeconds': accumulatedSeconds,
+        'currentSessionSeconds': currentSessionSeconds,
+        'accumulatedFileSize': accumulatedFileSize,
+        'currentSessionFileSize': currentSessionFileSize,
+        'status': status.index,
+        'autoReconnect': autoReconnect,
+        'retryCount': retryCount,
+        'createTime': createTime.toIso8601String(),
+        'lastFailTime': lastFailTime?.toIso8601String(),
+        'wasStoppedByUser': wasStoppedByUser,
+      };
 
   factory LiveRecordTask.fromJson(Map<String, dynamic> json) {
     final recordedSeconds = json['recordedSeconds'] ?? 0;
@@ -298,9 +302,12 @@ class LiveRecordTask {
       bitrate: (json['bitrate'] ?? 0).toDouble(),
       fps: (json['fps'] ?? 0).toDouble(),
       lastFrame: json['lastFrame'] ?? 0,
-      lastUpdate: json['lastUpdate'] != null ? DateTime.tryParse(json['lastUpdate']) : null,
-      recordingStartedAt:
-          json['recordingStartedAt'] != null ? DateTime.tryParse(json['recordingStartedAt']) : null,
+      lastUpdate: json['lastUpdate'] != null
+          ? DateTime.tryParse(json['lastUpdate'])
+          : null,
+      recordingStartedAt: json['recordingStartedAt'] != null
+          ? DateTime.tryParse(json['recordingStartedAt'])
+          : null,
       recordingBatchId: json['recordingBatchId'],
       recordingSessionIndex: json['recordingSessionIndex'] ?? 0,
       accumulatedSeconds: json['accumulatedSeconds'] ?? recordedSeconds,
@@ -310,8 +317,11 @@ class LiveRecordTask {
       status: RecordStatus.values[json['status'] ?? 0],
       autoReconnect: json['autoReconnect'] ?? true,
       retryCount: json['retryCount'] ?? 0,
-      createTime: DateTime.tryParse(json['createTime'] ?? '') ?? DateTime.now(),
-      lastFailTime: json['lastFailTime'] != null ? DateTime.tryParse(json['lastFailTime']) : null,
+      createTime:
+          DateTime.tryParse(json['createTime'] ?? '') ?? DateTime.now(),
+      lastFailTime: json['lastFailTime'] != null
+          ? DateTime.tryParse(json['lastFailTime'])
+          : null,
       wasStoppedByUser: json['wasStoppedByUser'] ?? false,
     );
   }
