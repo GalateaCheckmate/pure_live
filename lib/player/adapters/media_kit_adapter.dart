@@ -184,26 +184,17 @@ class MediaKitAdapter implements UnifiedPlayer {
         _widthSubject.add(null);
         _heightSubject.add(null);
 
-        // Detach the previous demuxer & texture before opening the next source.
-        // Keeping the Player instance is still faster than rebuilding MPV, while
-        // avoiding overlapping open calls during rapid room switching.
-        try {
-          await _player.stop();
-        } catch (_) {}
-
-        if (!_isGenerationCurrent(generation)) return;
-
+        // MediaKit/MPV replaces the current media when open is called. Do not
+        // stop the shared renderer here: on Windows that can detach the video
+        // output surface and leave every later room stuck on a black frame.
         await _player.open(
           Media(url, httpHeaders: headers),
           play: true,
         );
 
-        if (!_isGenerationCurrent(generation)) {
-          try {
-            await _player.stop();
-          } catch (_) {}
-          return;
-        }
+        // A newer source request is already queued. Let that request replace
+        // this source instead of stopping the shared renderer again.
+        if (!_isGenerationCurrent(generation)) return;
 
         final targetVolume = PlatformUtils.isMobile
             ? 1.0
