@@ -18,6 +18,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin {
   Timer? _debounceTimer;
+  Worker? _tabBottomWorker;
+  Worker? _savedMenuWorker;
   final FavoriteController favoriteController = Get.find<FavoriteController>();
 
   int _selectedIndex = 0;
@@ -35,22 +37,19 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
     _syncInitialIndex();
     addToOverlay();
 
-    favoriteController.tabBottomIndex.addListener(() {
+    _tabBottomWorker = ever(favoriteController.tabBottomIndex, (index) {
       if (mounted) {
-        setState(() => _selectedIndex = favoriteController.tabBottomIndex.value);
+        setState(() => _selectedIndex = index);
       }
     });
 
-    ever(SettingsService.to.app.savedMenuIds, (v) {
-      if (mounted) {
-        final List<String> value = List<String>.from(v as List);
-        if (value.isNotEmpty) {
-          final currentMenuId = HomeMenu.values[_selectedIndex].id;
-          if (!value.contains(currentMenuId)) {
-            final firstMenu = HomeMenu.fromId(value.first);
-            if (firstMenu != null) {
-              onDestinationSelected(firstMenu.index);
-            }
+    _savedMenuWorker = ever(SettingsService.to.app.savedMenuIds, (value) {
+      if (mounted && value.isNotEmpty) {
+        final currentMenuId = HomeMenu.values[_selectedIndex].id;
+        if (!value.contains(currentMenuId)) {
+          final firstMenu = HomeMenu.fromId(value.first);
+          if (firstMenu != null) {
+            onDestinationSelected(firstMenu.index);
           }
         }
       }
@@ -60,6 +59,8 @@ class _HomePageState extends State<HomePage> with AutomaticKeepAliveClientMixin 
   @override
   void dispose() {
     _debounceTimer?.cancel();
+    _tabBottomWorker?.dispose();
+    _savedMenuWorker?.dispose();
     super.dispose();
   }
 
