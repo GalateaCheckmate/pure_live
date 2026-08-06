@@ -21,14 +21,24 @@ class VideoProcessorService extends GetxService {
 
   Stream<VideoProcessEvent> get stream => _controller.stream;
 
-  bool isProcessing(String taskId) => _processingTasks.contains(taskId);
+  bool isProcessing(String taskId) {
+    return _processingTasks.any((key) => key.startsWith('$taskId:'));
+  }
 
   Future<bool> convertToMp4({
     required LiveRecordTask task,
     bool deleteSourceTs = true,
   }) async {
     final taskId = task.taskId;
-    if (!_processingTasks.add(taskId)) return false;
+    final batchId = task.recordingBatchId;
+    if (batchId == null || batchId.isEmpty) {
+      _emitFailed(taskId, i18n('video_ts_empty'));
+      return false;
+    }
+
+    final safeBatchId = _safeFilePart(batchId);
+    final processKey = '$taskId:$safeBatchId';
+    if (!_processingTasks.add(processKey)) return false;
 
     String? ffmpegTaskId;
     String? operationId;
@@ -40,10 +50,14 @@ class VideoProcessorService extends GetxService {
         return false;
       }
 
+      final filePrefix = '${safeBatchId}_s';
       final files = tsDir
           .listSync()
           .whereType<File>()
-          .where((file) => file.path.endsWith('.ts') && file.lengthSync() > 0)
+          .where((file) {
+            final name = p.basename(file.path);
+            return name.startsWith(filePrefix) && name.endsWith('.ts') && file.lengthSync() > 0;
+          })
           .toList()
         ..sort((a, b) => a.path.compareTo(b.path));
 
@@ -55,24 +69,15 @@ class VideoProcessorService extends GetxService {
       log('$taskId： ${i18n("video_ts_total", args: {"count": files.length.toString()})}');
       _controller.add(VideoProcessEvent(taskId: taskId, type: VideoProcessEventType.started));
 
-      final listFile = File(p.join(tsDir.path, 'list.txt'));
+      final listFile = File(p.join(tsDir.path, '${safeBatchId}_list.txt'));
       final buffer = StringBuffer();
       for (final file in files) {
         buffer.writeln("file '${file.path.replaceAll('\\', '/')}'");
       }
       await listFile.writeAsString(buffer.toString(), flush: true);
 
-      final createdAt = task.createTime;
-      final date =
-          '${createdAt.year}'
-          '${createdAt.month.toString().padLeft(2, '0')}'
-          '${createdAt.day.toString().padLeft(2, '0')}_'
-          '${createdAt.hour.toString().padLeft(2, '0')}'
-          '${createdAt.minute.toString().padLeft(2, '0')}'
-          '${createdAt.second.toString().padLeft(2, '0')}';
-      final outputPath = p.join(tsDir.path, '$date.mp4');
-
-      ffmpegTaskId = 'merge_$taskId';
+      final outputPath = p.join(tsDir.path, '$safeBatchId.mp4');
+      ffmpegTaskId = _safeFilePart('merge_${taskId}_$safeBatchId');
       operationId = '$ffmpegTaskId:${DateTime.now().microsecondsSinceEpoch}';
       final command = [
         '-y',
@@ -113,7 +118,9 @@ class VideoProcessorService extends GetxService {
                 outputPath: outputPath,
               ),
             );
-            if (deleteSourceTs) _deleteTsFiles(tsDir, taskId);
+            if (deleteSourceTs) {
+              _deleteBatchFiles(files, listFile, taskId);
+            }
             if (!completer.isCompleted) completer.complete(true);
             break;
           case FFmpegEventType.error:
@@ -139,29 +146,31 @@ class VideoProcessorService extends GetxService {
           return false;
         },
       );
-    } catch (e, stackTrace) {
-      log('Video processing failed: $e', stackTrace: stackTrace);
-      _emitFailed(taskId, e.toString());
+    } catch (error, stackTrace) {
+      log('Video processing failed: $error', stackTrace: stackTrace);
+      _emitFailed(taskId, error.toString());
       return false;
     } finally {
       if (ffmpegTaskId != null) {
         await _subscriptions.remove(ffmpegTaskId)?.cancel();
       }
-      _processingTasks.remove(taskId);
+      _processingTasks.remove(processKey);
     }
   }
 
-  void _deleteTsFiles(Directory dir, String taskId) {
+  void _deleteBatchFiles(List<File> files, File listFile, String taskId) {
     try {
-      if (!dir.existsSync()) return;
       log('$taskId： ${i18n("video_delete_temp_files")}');
-      for (final file in dir.listSync()) {
-        if (file.path.endsWith('.ts') || file.path.endsWith('list.txt')) {
+      for (final file in files) {
+        if (file.existsSync()) {
           file.deleteSync();
         }
       }
-    } catch (e) {
-      log('Delete temporary video files failed: $e');
+      if (listFile.existsSync()) {
+        listFile.deleteSync();
+      }
+    } catch (error) {
+      log('Delete temporary video files failed: $error');
     }
   }
 
@@ -174,6 +183,11 @@ class VideoProcessorService extends GetxService {
         error: message,
       ),
     );
+  }
+
+  static String _safeFilePart(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return sanitized.isEmpty ? 'recording' : sanitized;
   }
 
   @override
