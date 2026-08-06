@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
@@ -41,7 +42,8 @@ class CacheService extends GetxService {
   Future<RecordStorageSnapshot> getStorageSnapshot({bool forceScan = false}) async {
     final current = _snapshot;
     final isStale = current == null ||
-        DateTime.now().difference(current.scannedAt) >= _indexCalibrationInterval;
+        DateTime.now().difference(current.scannedAt) >=
+            _indexCalibrationInterval;
 
     if (forceScan || isStale) {
       await calibrateStorageIndex();
@@ -56,7 +58,8 @@ class CacheService extends GetxService {
 
     return base.copyWith(
       temporaryBytes: max(0, base.temporaryBytes + _temporaryDeltaBytes),
-      recordedVideoBytes: max(0, base.recordedVideoBytes + _recordedVideoDeltaBytes),
+      recordedVideoBytes:
+          max(0, base.recordedVideoBytes + _recordedVideoDeltaBytes),
     );
   }
 
@@ -169,7 +172,9 @@ class CacheService extends GetxService {
     return false;
   }
 
-  Future<RecordCleanupPreview> getCleanupPreview({bool forceScan = true}) async {
+  Future<RecordCleanupPreview> getCleanupPreview({
+    bool forceScan = true,
+  }) async {
     final snapshot = await getStorageSnapshot(forceScan: forceScan);
     var cleanableBytes = 0;
     var cleanableBatchCount = 0;
@@ -310,7 +315,9 @@ class CacheService extends GetxService {
     if (!Platform.isWindows) return null;
 
     try {
-      final target = path == null || path.isEmpty ? (await getRecordDir()).path : path;
+      final target = path == null || path.isEmpty
+          ? (await getRecordDir()).path
+          : path;
       final root = p.rootPrefix(Directory(target).absolute.path);
       if (root.isEmpty) return null;
       final escapedRoot = root.replaceAll("'", "''");
@@ -328,7 +335,10 @@ class CacheService extends GetxService {
       if (bytes == null) return null;
       return RecordDiskSpaceInfo(rootPath: root, availableBytes: bytes);
     } catch (error) {
-      developer.log('Disk space query failed: $error', name: 'CacheService');
+      developer.log(
+        'Disk space query failed: $error',
+        name: 'CacheService',
+      );
       return null;
     }
   }
@@ -374,15 +384,19 @@ class CacheService extends GetxService {
     final base = await getRecordDir();
     final now = DateTime.now();
     final date =
-        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
     final time =
         '${now.hour.toString().padLeft(2, '0')}-'
         '${now.minute.toString().padLeft(2, '0')}-'
         '${now.second.toString().padLeft(2, '0')}';
     final safePlatform =
         usePinyinForFolder ? PathHelper.toSafePinyin(platform) : platform;
-    final safeNick = usePinyinForFolder ? PathHelper.toSafePinyin(nick) : nick;
-    final dir = Directory(p.join(base.path, safePlatform, safeNick, date, time));
+    final safeNick =
+        usePinyinForFolder ? PathHelper.toSafePinyin(nick) : nick;
+    final dir = Directory(
+      p.join(base.path, safePlatform, safeNick, date, time),
+    );
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -496,6 +510,7 @@ bool _isTemporaryFile(String path) {
   return extension == '.ts' ||
       extension == '.partial' ||
       extension == '.tmp' ||
+      name.contains('.partial.') ||
       name == 'list.txt' ||
       name.endsWith('_list.txt');
 }
@@ -508,8 +523,10 @@ bool _isRecordedVideoFile(String path) {
 _TemporaryBatchIdentity _temporaryBatchIdentity(String path) {
   final directoryPath = p.dirname(path);
   final name = p.basename(path);
-  final segmentMatch = RegExp(r'^(.+)_s\d{3}_\d{5}\.ts$', caseSensitive: false)
-      .firstMatch(name);
+  final segmentMatch = RegExp(
+    r'^(.+)_s\d{3}_\d{5}\.ts$',
+    caseSensitive: false,
+  ).firstMatch(name);
   if (segmentMatch != null) {
     final batchId = segmentMatch.group(1)!;
     return _TemporaryBatchIdentity(
@@ -519,7 +536,10 @@ _TemporaryBatchIdentity _temporaryBatchIdentity(String path) {
     );
   }
 
-  final listMatch = RegExp(r'^(.+)_list\.txt$', caseSensitive: false).firstMatch(name);
+  final listMatch = RegExp(
+    r'^(.+)_list\.txt$',
+    caseSensitive: false,
+  ).firstMatch(name);
   if (listMatch != null) {
     final batchId = listMatch.group(1)!;
     return _TemporaryBatchIdentity(
