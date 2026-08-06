@@ -43,3 +43,5 @@ jobs:
           git add -A
           git commit -m "fix: stabilize favorite interactions and lifecycle"
           git push origin HEAD:agent/favorite-audit-fix
+
+# Restarted after the shared runner became available.
