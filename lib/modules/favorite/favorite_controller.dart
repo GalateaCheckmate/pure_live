@@ -21,6 +21,7 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
   Stopwatch? _refreshStopwatch;
   Timer? _debounceTimer;
   int _refreshGeneration = 0;
+  final List<Worker> _workers = <Worker>[];
 
   final onlineRooms = <LiveRoom>[].obs;
   final offlineRooms = <LiveRoom>[].obs;
@@ -36,13 +37,11 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
 
     tabController = TabController(length: 3, vsync: this);
 
-    debounce(SettingsService.to.fav.favoriteRooms, (_) => applyLocalFilter(), time: const Duration(milliseconds: 1000));
-
-    ever(selectedTagId, (_) => applyLocalFilter());
-    ever(tabSiteIndex, (_) => applyLocalFilter());
-    ever(tabOnlineIndex, (_) => applyLocalFilter());
-    ever(tagController.tags, (_) => applyLocalFilter());
-    ever(tagController.roomTagsMap, (_) => applyLocalFilter());
+    _workers.addAll([
+      ever(SettingsService.to.fav.favoriteRooms, (_) => applyLocalFilter()),
+      ever(tagController.tags, (_) => applyLocalFilter()),
+      ever(tagController.roomTagsMap, (_) => applyLocalFilter()),
+    ]);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       applyLocalFilter();
@@ -85,6 +84,10 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
   @override
   void onClose() {
     _refreshGeneration++;
+    for (final worker in _workers) {
+      worker.dispose();
+    }
+    _workers.clear();
     tabController.dispose();
     subscription?.cancel();
     _configSubscription?.cancel();
@@ -100,6 +103,7 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
   }
 
   void changeSelectedTag(String tagId) {
+    if (selectedTagId.value == tagId) return;
     selectedTagId.value = tagId;
     if (Get.width > 680) {
       currentPage = 1;
@@ -107,9 +111,24 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
     applyLocalFilter();
   }
 
-  void updateRoomTags(LiveRoom room, List<String> newTagIds) {
-    tagController.setRoomTags(room.roomId.toString(), newTagIds);
+  void changeSite(int siteIndex) {
+    final availableSites = Sites().availableSites(containsAll: true);
+    if (siteIndex < 0 || siteIndex >= availableSites.length) return;
+
+    final bool siteChanged = tabSiteIndex.value != siteIndex;
+    final bool tagChanged = selectedTagId.value != TagManagementController.allTagKey;
+    if (!siteChanged && !tagChanged) return;
+
+    selectedTagId.value = TagManagementController.allTagKey;
+    tabSiteIndex.value = siteIndex;
+    if (Get.width > 680) {
+      currentPage = 1;
+    }
     applyLocalFilter();
+  }
+
+  void updateRoomTags(LiveRoom room, List<String> newTagIds) {
+    tagController.setRoomTags(room, newTagIds);
   }
 
   List<LiveRoom> getAllRooms() {
@@ -286,7 +305,6 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
       final roomsToRefresh = getFilteredRoomsIgnoringLiveStatus();
       final applied = await _refreshRoomDetails(roomsToRefresh, generation);
       if (applied && generation == _refreshGeneration) {
-        applyLocalFilter();
         EventBus.instance.emit('refresh_favorite_finish', true);
       }
     } finally {
@@ -303,7 +321,6 @@ class FavoriteController extends LocalReactivePageController<LiveRoom> with GetT
       final roomsToRefresh = getAllRooms();
       final applied = await _refreshRoomDetails(roomsToRefresh, generation);
       if (applied && generation == _refreshGeneration) {
-        applyLocalFilter();
         EventBus.instance.emit('refresh_favorite_finish', true);
       }
     } finally {
