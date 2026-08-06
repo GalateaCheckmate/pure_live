@@ -215,7 +215,9 @@ class _SegmentOutputMetrics {
   });
 
   factory _SegmentOutputMetrics.fromCommand(String command) {
-    final matches = RegExp(r'"(.+?%0?\d*d\.ts)"').allMatches(command).toList();
+    final matches = RegExp(r'"([^\"]+%0?\d*d\.ts)"')
+        .allMatches(command)
+        .toList();
     if (matches.isEmpty) {
       throw const FormatException('No segmented TS output pattern');
     }
