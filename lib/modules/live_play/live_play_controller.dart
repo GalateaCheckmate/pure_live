@@ -64,6 +64,10 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   Worker? _timerWorker;
   StreamSubscription<dynamic>? _stopWatchSubscription;
   int _loadGeneration = 0;
+  int _roomSwitchGeneration = 0;
+  Timer? _rendererWatchdog;
+  Future<void>? _rendererRecoveryOperation;
+  bool _rendererRecoveryAttempted = false;
   bool _danmakuInitialized = false;
   bool _closed = false;
 
@@ -166,11 +170,15 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   void onClose() {
     _closed = true;
     _loadGeneration++;
+    _roomSwitchGeneration++;
+    _rendererWatchdog?.cancel();
     unawaited(_disposeAll());
     super.onClose();
   }
 
   Future<void> _disposeAll() async {
+    _rendererWatchdog?.cancel();
+    _rendererWatchdog = null;
     _timerWorker?.dispose();
     _timerWorker = null;
     await _stopWatchSubscription?.cancel();
@@ -195,6 +203,9 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     bool isReCalculate = true,
   }) async {
     final generation = ++_loadGeneration;
+    _rendererWatchdog?.cancel();
+    _rendererRecoveryAttempted = false;
+
     final currentDetail = detail.value;
     final roomId = currentDetail?.roomId;
     final platform = currentDetail?.platform;
@@ -271,7 +282,15 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
   }
 
   Future<void> switchRoom(LiveRoom newRoom) async {
+    final recovery = _rendererRecoveryOperation;
+    if (recovery != null) await recovery;
+    if (_closed) return;
+
+    final switchGeneration = ++_roomSwitchGeneration;
     _loadGeneration++;
+    _rendererWatchdog?.cancel();
+    _rendererRecoveryAttempted = false;
+
     final sameRoom = detail.value?.roomId == newRoom.roomId && detail.value?.platform == newRoom.platform;
 
     if (!sameRoom) {
@@ -283,14 +302,19 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
       _currentDanmakuRoomId = null;
     }
 
-    final manager = GlobalPlayerService.instance.playerManager;
-    await manager.close();
+    // This is an in-page source replacement, not a page exit. Muting avoids
+    // hearing the previous room while the new URL is resolved, but preserves
+    // the shared Windows renderer and texture.
+    await GlobalPlayerService.instance.playerManager.setVolume(0);
+    if (_closed || switchGeneration != _roomSwitchGeneration) return;
 
     success.value = false;
     isLiving.value = true;
 
-    await videoController.value?.destory();
+    final previousController = videoController.value;
     videoController.value = null;
+    await previousController?.destory();
+    if (_closed || switchGeneration != _roomSwitchGeneration) return;
 
     hasUseDefaultResolution = false;
     isCurrentRoomAudioOnly.value = SettingsService.to.player.audioOnly.v;
@@ -304,7 +328,7 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     }
 
     await EmojiManager.instance.preload(newRoom.platform!);
-    if (_closed) return;
+    if (_closed || switchGeneration != _roomSwitchGeneration) return;
 
     await onInitPlayerState(
       reloadDataType: newRoom.platform == Sites.bilibiliSite ? ReloadDataType.changeLine : ReloadDataType.refreash,
@@ -375,7 +399,7 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     };
 
     liveDanmaku.onReady = () {
-      if (!_closed) messages.add(_systemMsg(i18n('danmaku_connected')));
+      if (!_closed) messages.add(_systemMsg(i18n('danmaku_connected'));
     };
   }
 
@@ -391,7 +415,10 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     messages.add(msg);
   }
 
-  Future<void> setPlayer({int? generation}) async {
+  Future<void> setPlayer({
+    int? generation,
+    bool allowRendererRecovery = true,
+  }) async {
     if (generation != null && !_isLoadActive(generation)) return;
     final currentRoom = detail.value;
     final datasource = _playUrlSafe;
@@ -451,11 +478,89 @@ class LivePlayController extends StateController with GetSingleTickerProviderSta
     );
 
     success.value = true;
+    _scheduleRendererWatchdog(
+      generation: generation ?? _loadGeneration,
+      room: currentRoom,
+      allowRecovery: allowRendererRecovery,
+    );
+  }
+
+  void _scheduleRendererWatchdog({
+    required int generation,
+    required LiveRoom room,
+    required bool allowRecovery,
+  }) {
+    _rendererWatchdog?.cancel();
+    if (!allowRecovery || isCurrentRoomAudioOnly.value) return;
+
+    final roomKey = '${room.platform}:${room.roomId}';
+    _rendererWatchdog = Timer(const Duration(seconds: 10), () {
+      unawaited(_startRendererRecovery(generation, roomKey));
+    });
+  }
+
+  Future<void> _startRendererRecovery(int generation, String roomKey) async {
+    if (_rendererRecoveryOperation != null) return;
+    final operation = _performRendererRecovery(generation, roomKey);
+    _rendererRecoveryOperation = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_rendererRecoveryOperation, operation)) {
+        _rendererRecoveryOperation = null;
+      }
+    }
+  }
+
+  Future<void> _performRendererRecovery(int generation, String roomKey) async {
+    if (!_isLoadActive(generation) || _rendererRecoveryAttempted) return;
+
+    final currentRoom = detail.value;
+    if (currentRoom == null || '${currentRoom.platform}:${currentRoom.roomId}' != roomKey) {
+      return;
+    }
+
+    final manager = GlobalPlayerService.instance.playerManager;
+    int? width;
+    int? height;
+    try {
+      width = await manager.width.first.timeout(const Duration(milliseconds: 250));
+      height = await manager.height.first.timeout(const Duration(milliseconds: 250));
+    } catch (_) {}
+
+    final hasUsableVideo = manager.isPlayingNow &&
+        width != null &&
+        width > 0 &&
+        height != null &&
+        height > 0;
+    if (hasUsableVideo || !_isLoadActive(generation)) return;
+
+    _rendererRecoveryAttempted = true;
+    success.value = false;
+
+    final staleController = videoController.value;
+    videoController.value = null;
+    await staleController?.destory();
+    if (!_isLoadActive(generation)) return;
+
+    await manager.hardDispose();
+    if (!_isLoadActive(generation)) return;
+
+    await setPlayer(
+      generation: generation,
+      allowRendererRecovery: false,
+    );
   }
 
   Future<void> setResolution(ReloadDataType reloadDataType, int qualityIndex, int lineIndex) async {
+    final recovery = _rendererRecoveryOperation;
+    if (recovery != null) await recovery;
+
+    _roomSwitchGeneration++;
     _loadGeneration++;
-    await GlobalPlayerService.instance.playerManager.close();
+    _rendererWatchdog?.cancel();
+    _rendererRecoveryAttempted = false;
+    await GlobalPlayerService.instance.playerManager.setVolume(0);
     await videoController.value?.destory();
     videoController.value = null;
 
