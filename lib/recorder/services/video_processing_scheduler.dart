@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:developer';
+
 import 'package:pure_live/recorder/models/live_record_task.dart';
+import 'package:pure_live/recorder/models/record_storage_snapshot.dart';
+import 'package:pure_live/recorder/services/cache_service.dart';
 import 'package:pure_live/recorder/services/video_processor_service.dart';
 
 class VideoProcessingScheduler {
   VideoProcessingScheduler._();
 
-  static final VideoProcessingScheduler instance = VideoProcessingScheduler._();
+  static final VideoProcessingScheduler instance =
+      VideoProcessingScheduler._();
 
   final Queue<_VideoProcessingJob> _queue = Queue<_VideoProcessingJob>();
   final Set<String> _queuedKeys = <String>{};
@@ -19,20 +23,70 @@ class VideoProcessingScheduler {
 
   bool enqueue({
     required LiveRecordTask task,
+    required int segmentTime,
+    required int maxMergeDurationSeconds,
     required FutureOr<void> Function(bool success) onComplete,
   }) {
-    if (_disposed) return false;
-
     final batchId = task.recordingBatchId;
-    if (batchId == null || batchId.isEmpty) return false;
+    final directoryPath = task.outputDir;
+    if (_disposed ||
+        batchId == null ||
+        batchId.isEmpty ||
+        directoryPath == null ||
+        directoryPath.isEmpty) {
+      return false;
+    }
 
     final key = '${task.taskId}:$batchId';
+    return _enqueueJob(
+      key: key,
+      directoryPath: directoryPath,
+      runner: () => VideoProcessorService.to.convertToMp4(
+        task: task.cloneForProcessing(),
+        segmentTime: segmentTime,
+        maxMergeDurationSeconds: maxMergeDurationSeconds,
+      ),
+      onComplete: onComplete,
+    );
+  }
+
+  bool enqueueRecovery({
+    required RecoverableRecordingBatch batch,
+    required int segmentTime,
+    required int maxMergeDurationSeconds,
+    FutureOr<void> Function(bool success)? onComplete,
+  }) {
+    if (_disposed || batch.tsFilePaths.isEmpty) return false;
+
+    final key = 'recovery:${batch.directoryPath}:${batch.batchId}';
+    return _enqueueJob(
+      key: key,
+      directoryPath: batch.directoryPath,
+      runner: () => VideoProcessorService.to.recoverBatch(
+        batch: batch,
+        segmentTime: segmentTime,
+        maxMergeDurationSeconds: maxMergeDurationSeconds,
+      ),
+      onComplete: onComplete ?? (_) {},
+    );
+  }
+
+  bool _enqueueJob({
+    required String key,
+    required String directoryPath,
+    required Future<bool> Function() runner,
+    required FutureOr<void> Function(bool success) onComplete,
+  }) {
     if (!_queuedKeys.add(key)) return false;
 
+    final owner = 'video-processing:$key';
+    CacheService.to.protectPath(directoryPath, owner);
     _queue.add(
       _VideoProcessingJob(
         key: key,
-        task: task.cloneForProcessing(),
+        directoryPath: directoryPath,
+        protectionOwner: owner,
+        runner: runner,
         onComplete: onComplete,
       ),
     );
@@ -47,9 +101,9 @@ class VideoProcessingScheduler {
     try {
       while (_queue.isNotEmpty && !_disposed) {
         final job = _queue.removeFirst();
-        bool success = false;
+        var success = false;
         try {
-          success = await VideoProcessorService.to.convertToMp4(task: job.task);
+          success = await job.runner();
         } catch (error, stackTrace) {
           log(
             'Video processing job failed: $error',
@@ -58,6 +112,10 @@ class VideoProcessingScheduler {
           );
         } finally {
           _queuedKeys.remove(job.key);
+          CacheService.to.releasePath(
+            job.directoryPath,
+            job.protectionOwner,
+          );
         }
 
         try {
@@ -81,6 +139,10 @@ class VideoProcessingScheduler {
   void clearPending() {
     for (final job in _queue) {
       _queuedKeys.remove(job.key);
+      CacheService.to.releasePath(
+        job.directoryPath,
+        job.protectionOwner,
+      );
     }
     _queue.clear();
   }
@@ -93,12 +155,16 @@ class VideoProcessingScheduler {
 
 class _VideoProcessingJob {
   final String key;
-  final LiveRecordTask task;
+  final String directoryPath;
+  final String protectionOwner;
+  final Future<bool> Function() runner;
   final FutureOr<void> Function(bool success) onComplete;
 
   const _VideoProcessingJob({
     required this.key,
-    required this.task,
+    required this.directoryPath,
+    required this.protectionOwner,
+    required this.runner,
     required this.onComplete,
   });
 }
