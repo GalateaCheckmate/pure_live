@@ -63,8 +63,6 @@ class BiliBiliDanmaku implements LiveDanmaku {
   @override
   Function()? onReady;
 
-  // String serverUrl = "wss://broadcastlv.chat.bilibili.com/sub";
-
   WebScoketUtils? webScoketUtils;
   late BiliBiliDanmakuArgs danmakuArgs;
   @override
@@ -123,31 +121,21 @@ class BiliBiliDanmaku implements LiveDanmaku {
     onMessage = null;
     onClose = null;
     webScoketUtils?.close();
+    markDisconnected();
   }
 
   List<int> encodeData(String msg, int action) {
     var data = utf8.encode(msg);
-    //头部长度固定16
+    // 头部长度固定 16。
     var length = data.length + 16;
     var buffer = Uint8List(length);
 
     var writer = BinaryWriter([]);
-
-    //数据包长度
     writer.writeInt(buffer.length, 4);
-    //数据包头部长度,固定16
     writer.writeInt(16, 2);
-
-    //协议版本，0=JSON,1=Int32,2=Buffer
     writer.writeInt(0, 2);
-
-    //操作类型
     writer.writeInt(action, 4);
-
-    //数据包头部长度,固定1
-
     writer.writeInt(1, 4);
-
     writer.writeBytes(data);
 
     return writer.buffer;
@@ -155,25 +143,12 @@ class BiliBiliDanmaku implements LiveDanmaku {
 
   void decodeMessage(List<int> data) {
     try {
-      //协议版本。0为JSON，可以直接解析；1为房间人气值,Body为4位Int32；2为压缩过Buffer，需要解压再处理
+      // 心跳回应中的 Int32 是旧的人气值，不再作为房间观众数上报。
       int protocolVersion = readInt(data, 6, 2);
-      //操作类型。3=心跳回应，内容为房间人气值；5=通知，弹幕、广播等全部信息；8=进房回应，空
       int operation = readInt(data, 8, 4);
-      //内容
       var body = data.skip(16).toList();
-      if (operation == 3) {
-        var online = readInt(body, 0, 4);
 
-        onMessage?.call(
-          LiveMessage(
-            type: LiveMessageType.online,
-            data: online,
-            color: LiveMessageColor.white,
-            message: "",
-            userName: "",
-          ),
-        );
-      } else if (operation == 5) {
+      if (operation == 5) {
         if (protocolVersion == 2) {
           body = zlib.decode(body);
         } else if (protocolVersion == 3) {
@@ -181,8 +156,9 @@ class BiliBiliDanmaku implements LiveDanmaku {
         }
 
         var text = utf8.decode(body, allowMalformed: true);
-
-        var group = text.split(RegExp(r"[\x00-\x1f]+", unicode: true, multiLine: true));
+        var group = text.split(
+          RegExp(r"[\x00-\x1f]+", unicode: true, multiLine: true),
+        );
         for (var item in group.where((x) => x.length > 2 && x.startsWith('{'))) {
           parseMessage(item);
         }
@@ -206,10 +182,25 @@ class BiliBiliDanmaku implements LiveDanmaku {
               type: LiveMessageType.chat,
               userName: username,
               message: message,
-              color: color == 0 ? LiveMessageColor.white : LiveMessageColor.numberToColor(color),
+              color: color == 0
+                  ? LiveMessageColor.white
+                  : LiveMessageColor.numberToColor(color),
             );
             onMessage?.call(liveMsg);
           }
+        }
+      } else if (cmd.startsWith("ONLINE_RANK_COUNT")) {
+        final audienceCount = _readAudienceCount(obj["data"]);
+        if (audienceCount != null) {
+          onMessage?.call(
+            LiveMessage(
+              type: LiveMessageType.online,
+              data: audienceCount,
+              color: LiveMessageColor.white,
+              message: "",
+              userName: "",
+            ),
+          );
         }
       } else if (cmd == "SUPER_CHAT_MESSAGE") {
         if (obj["data"] == null) {
@@ -218,11 +209,15 @@ class BiliBiliDanmaku implements LiveDanmaku {
         LiveSuperChatMessage sc = LiveSuperChatMessage(
           backgroundBottomColor: obj["data"]["background_bottom_color"].toString(),
           backgroundColor: obj["data"]["background_color"].toString(),
-          endTime: DateTime.fromMillisecondsSinceEpoch(obj["data"]["end_time"] * 1000),
+          endTime: DateTime.fromMillisecondsSinceEpoch(
+            obj["data"]["end_time"] * 1000,
+          ),
           face: "${obj["data"]["user_info"]["face"]}@200w.jpg",
           message: obj["data"]["message"].toString(),
           price: obj["data"]["price"],
-          startTime: DateTime.fromMillisecondsSinceEpoch(obj["data"]["start_time"] * 1000),
+          startTime: DateTime.fromMillisecondsSinceEpoch(
+            obj["data"]["start_time"] * 1000,
+          ),
           userName: obj["data"]["user_info"]["uname"].toString(),
         );
         var liveMsg = LiveMessage(
@@ -239,8 +234,36 @@ class BiliBiliDanmaku implements LiveDanmaku {
     }
   }
 
+  int? _readAudienceCount(dynamic rawData) {
+    if (rawData is! Map) return null;
+
+    final rawCount = rawData["online_count"] ?? rawData["onlineCount"];
+    if (rawCount is num) return rawCount.toInt();
+    if (rawCount != null) {
+      final parsed = int.tryParse(rawCount.toString());
+      if (parsed != null) return parsed;
+    }
+
+    final text = rawData["online_count_text"]?.toString().trim();
+    if (text == null || text.isEmpty) return null;
+    return _parseReadableCount(text);
+  }
+
+  int? _parseReadableCount(String text) {
+    final match = RegExp(r"([0-9]+(?:\.[0-9]+)?)").firstMatch(text);
+    if (match == null) return null;
+
+    final value = double.tryParse(match.group(1)!);
+    if (value == null) return null;
+    if (text.contains("亿")) return (value * 100000000).round();
+    if (text.contains("万")) return (value * 10000).round();
+    return value.round();
+  }
+
   int readInt(List<int> buffer, int start, int len) {
-    var bytes = Uint8List.fromList(buffer.getRange(start, start + len).toList());
+    var bytes = Uint8List.fromList(
+      buffer.getRange(start, start + len).toList(),
+    );
     var byteBuffer = bytes.buffer;
     var data = ByteData.view(byteBuffer);
     var result = 0;
