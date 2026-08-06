@@ -1,52 +1,39 @@
 # Windows-only baseline
 
-PureLive now targets Windows x64 as its only supported Flutter platform.
+PureLive currently targets Windows x64 as its only supported Flutter platform.
 
 ## Platform scope
 
-- The Android, iOS, Linux and macOS runner projects have been removed.
+- Android, iOS, Linux and macOS runner projects have been removed.
 - CI and release automation build Windows only.
-- Application startup always initializes the Windows desktop window manager,
+- Application startup initializes the Windows desktop window manager,
   single-instance guard, brightness integration and launch-at-startup support.
-- The mobile platform manager and Android shared-media bootstrap have been removed.
 - `PlatformUtils` remains as a compatibility facade for older call sites, but
-  resolves all platform decisions to Windows desktop behavior.
+  resolves platform decisions to Windows desktop behavior.
+- Mobile storage-permission handling and its direct dependencies have been
+  removed from the recorder path.
 
 ## Runtime baseline
 
 - Required database and settings services are awaited before the first frame.
 - FFmpeg, recording and account services remain deferred until startup finishes.
-- The invalid template counter test is replaced with architecture contract tests.
-- The self-export in `lib/common/index.dart` is removed.
-- A PowerShell baseline collector records package size and can optionally record
-  process startup and memory data on a real Windows desktop.
+- Recorder tasks persist their lifecycle state and can recover after restart.
+- Favorite-room refresh runs requests concurrently and publishes one atomic UI
+  update after all available results are merged.
+- Danmaku WebSocket connections explicitly use the configured application proxy
+  or a direct connection instead of inheriting stale environment proxies.
 
-## Favorite refresh pipeline
+## Validation strategy
 
-Favorite-room refresh now starts all valid room-detail requests together instead
-of waiting for small sequential batches. Individual room failures and 20-second
-request timeouts are isolated, successful results are merged into the latest
-favorites snapshot, and the observable list is published only once after the
-whole refresh finishes. A generation token prevents an older refresh from
-overwriting a newer request.
-
-## Deferred recorder cleanup
-
-The recorder branch contains newer lifecycle work than this baseline branch.
-The Windows-only removal of Android storage permission handling is staged in:
+Routine validation uses **Windows Quick Check**:
 
 ```text
-development/patches/windows-only-recorder-permission-cleanup.diff
+flutter analyze --no-pub
+flutter test --no-pub
 ```
 
-Apply that patch while integrating the recorder branch instead of restoring the
-older recorder controller from this branch.
-
-## Final validation strategy
-
-Development commits use `[skip ci]`. After the Windows baseline, player and
-recorder branches are integrated, run the Windows workflow once for dependency
-resolution, static analysis, tests and the release build.
+The manually triggered **Windows Full Build** also builds the Windows release,
+uploads the portable application and records a package-size baseline.
 
 For an interactive local runtime baseline after building on Windows:
 
