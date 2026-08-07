@@ -43,3 +43,5 @@ jobs:
           git add -A
           git commit -m "fix: complete favorite interaction audit"
           git push origin HEAD:agent/favorite-audit-fix
+
+# Final retry after separating workflow updates from the repair commit.
