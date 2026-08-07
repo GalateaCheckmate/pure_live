@@ -777,16 +777,12 @@ class FavoriteFloatingButton extends StatefulWidget {
 }
 
 class _FavoriteFloatingButtonState extends State<FavoriteFloatingButton> {
-  StreamSubscription<dynamic>? subscription;
+  StreamSubscription<dynamic>? _subscription;
 
   @override
   void initState() {
     super.initState();
-    listenFavorite();
-  }
-
-  void listenFavorite() {
-    subscription = EventBus.instance.listen('changeFavorite', (data) {
+    _subscription = EventBus.instance.listen('changeFavorite', (_) {
       if (mounted) {
         setState(() {});
       }
@@ -794,56 +790,75 @@ class _FavoriteFloatingButtonState extends State<FavoriteFloatingButton> {
   }
 
   @override
+  void dispose() {
+    _subscription?.cancel();
+    _subscription = null;
+    super.dispose();
+  }
+
+  void _syncAfterMutation(bool changed) {
+    if (mounted) {
+      setState(() {});
+    }
+    if (changed) {
+      EventBus.instance.emit('changeFavorite', true);
+    }
+  }
+
+  Future<void> _unfollow() async {
+    final bool? confirmed = await Get.dialog<bool>(
+      AlertDialog(
+        title: Text(i18n("unfollow")),
+        content: Text(
+          i18n(
+            "unfollow_message",
+            args: {"name": widget.room.nick ?? widget.room.title ?? ''},
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Get.back(result: false), child: Text(i18n("cancel"))),
+          ElevatedButton(onPressed: () => Get.back(result: true), child: Text(i18n("confirm"))),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    _syncAfterMutation(SettingsService.to.fav.removeRoom(widget.room));
+  }
+
+  void _follow() {
+    _syncAfterMutation(SettingsService.to.fav.addRoom(widget.room));
+  }
+
+  @override
   Widget build(BuildContext context) {
-    bool isFavorite = SettingsService.to.fav.isFavorite(widget.room);
+    final bool isFavorite = SettingsService.to.fav.isFavorite(widget.room);
     return isFavorite
         ? FilledButton(
             style: ButtonStyle(
               padding: Platform.isWindows
-                  ? WidgetStateProperty.all(EdgeInsets.all(12.0))
-                  : WidgetStateProperty.all(EdgeInsets.all(5.0)),
+                  ? WidgetStateProperty.all(const EdgeInsets.all(12.0))
+                  : WidgetStateProperty.all(const EdgeInsets.all(5.0)),
               backgroundColor: WidgetStateProperty.all(Get.theme.colorScheme.primary.withAlpha(125)),
               shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(6.0))),
               textStyle: WidgetStateProperty.all(AppTextStyles.t12),
               minimumSize: WidgetStateProperty.all(Size.zero),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            onPressed: () {
-              Get.dialog(
-                AlertDialog(
-                  title: Text(i18n("unfollow")),
-                  content: Text(i18n("unfollow_message", args: {"name": widget.room.nick!})),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.of(Get.context!).pop(false), child: Text(i18n("cancel"))),
-                    ElevatedButton(onPressed: () => Navigator.of(Get.context!).pop(true), child: Text(i18n("confirm"))),
-                  ],
-                ),
-              ).then((value) {
-                if (value ?? false) {
-                  setState(() => isFavorite = !isFavorite);
-                  SettingsService.to.fav.removeRoom(widget.room);
-                  EventBus.instance.emit('changeFavorite', true);
-                }
-              });
-            },
+            onPressed: _unfollow,
             child: Text(i18n("followed")),
           )
         : FilledButton(
             style: ButtonStyle(
               padding: Platform.isWindows
-                  ? WidgetStateProperty.all(EdgeInsets.all(12.0))
-                  : WidgetStateProperty.all(EdgeInsets.all(5.0)),
+                  ? WidgetStateProperty.all(const EdgeInsets.all(12.0))
+                  : WidgetStateProperty.all(const EdgeInsets.all(5.0)),
               backgroundColor: WidgetStateProperty.all(Get.theme.colorScheme.primary),
               shape: WidgetStateProperty.all(RoundedRectangleBorder(borderRadius: BorderRadius.circular(6.0))),
               textStyle: WidgetStateProperty.all(AppTextStyles.t12),
               minimumSize: WidgetStateProperty.all(Size.zero),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            onPressed: () {
-              setState(() => isFavorite = !isFavorite);
-              SettingsService.to.fav.addRoom(widget.room);
-              EventBus.instance.emit('changeFavorite', true);
-            },
+            onPressed: _follow,
             child: Text(i18n("follow")),
           );
   }

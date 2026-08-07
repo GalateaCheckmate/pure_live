@@ -763,19 +763,33 @@ class FollowButton extends StatefulWidget {
 class _FollowButtonState extends State<FollowButton> {
   late bool isFavorite = SettingsService.to.fav.isFavorite(widget.room);
 
+  void _toggleFavorite() {
+    final bool wasFavorite = SettingsService.to.fav.isFavorite(widget.room);
+    if (wasFavorite) {
+      SettingsService.to.fav.removeRoom(widget.room);
+    } else {
+      SettingsService.to.fav.addRoom(widget.room);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      isFavorite = SettingsService.to.fav.isFavorite(widget.room);
+    });
+    Navigator.of(context).pop();
+  }
+
   @override
   Widget build(BuildContext context) {
     return FilledButton.tonal(
-      onPressed: () {
-        setState(() => isFavorite = !isFavorite);
-        isFavorite ? SettingsService.to.fav.addRoom(widget.room) : SettingsService.to.fav.removeRoom(widget.room);
-        Navigator.of(Get.context!).pop();
-      },
+      onPressed: _toggleFavorite,
       style: FilledButton.styleFrom(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
       ),
-      child: Text(isFavorite ? i18n("unfollow") : i18n("follow"), style: const TextStyle(fontWeight: FontWeight.w600)),
+      child: Text(
+        isFavorite ? i18n("unfollow") : i18n("follow"),
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
     );
   }
 }
