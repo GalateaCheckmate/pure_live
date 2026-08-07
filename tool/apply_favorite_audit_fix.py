@@ -173,19 +173,7 @@ class _FavoriteFloatingButtonState extends State<FavoriteFloatingButton> {
 class NotLivingVideoWidget""",
 )
 
-replace_once(
-    ".github/workflows/windows-ci.yml",
-    "on:\n  workflow_dispatch:\n",
-    """on:
-  workflow_dispatch:
-  push:
-    branches:
-      - "agent/favorite-audit-fix"
-""",
-)
-
 for path in (
-    ".github/workflows/apply-favorite-audit-fix.yml",
     "tool/apply_favorite_audit_fix.py",
     "tool/run_favorite_audit_fix.py",
 ):
