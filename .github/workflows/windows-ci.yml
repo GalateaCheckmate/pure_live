@@ -2,6 +2,9 @@ name: Windows Full Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "agent/favorite-audit-fix"
 
 permissions:
   contents: read
