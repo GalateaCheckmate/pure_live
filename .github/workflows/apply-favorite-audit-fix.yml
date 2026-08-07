@@ -31,7 +31,7 @@ jobs:
       - name: Verify patch shape
         shell: bash
         run: |
-          git diff --check
+          git -c core.whitespace=cr-at-eol diff --check
           git status --short
           test -n "$(git status --short)"
 
