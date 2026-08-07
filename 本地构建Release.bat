@@ -8,9 +8,7 @@ if errorlevel 1 goto :repo_failed
 set "BUILD_DIR=%CD%\build\windows\x64\runner\Release"
 set "OUTPUT_DIR=%CD%\PureLive-Local"
 set "TEMP_DIR=%CD%\PureLive-Local.__new"
-set "ZIP_PATH=%CD%\PureLive-Windows.zip"
-set "PURELIVE_OUTPUT_DIR=%OUTPUT_DIR%"
-set "PURELIVE_ZIP_PATH=%ZIP_PATH%"
+set "OLD_ZIP=%CD%\PureLive-Windows.zip"
 
 where fvm >nul 2>nul
 if not errorlevel 1 (
@@ -44,7 +42,7 @@ if errorlevel 1 goto :copy_failed
 
 if exist "%OUTPUT_DIR%" (
     echo.
-    echo [PureLive] 正在覆盖旧的 PureLive-Local...
+    echo [PureLive] 正在覆盖旧的 PureLive-Local 文件夹...
     rmdir /s /q "%OUTPUT_DIR%"
     if exist "%OUTPUT_DIR%" goto :replace_failed
 )
@@ -52,16 +50,16 @@ if exist "%OUTPUT_DIR%" (
 move "%TEMP_DIR%" "%OUTPUT_DIR%" >nul
 if errorlevel 1 goto :replace_failed
 
-if exist "%ZIP_PATH%" del /f /q "%ZIP_PATH%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path (Join-Path $env:PURELIVE_OUTPUT_DIR '*') -DestinationPath $env:PURELIVE_ZIP_PATH -Force"
-if errorlevel 1 goto :zip_failed
+rem 旧版本脚本曾生成 ZIP；现在只保留文件夹输出，顺手清理旧 ZIP。
+if exist "%OLD_ZIP%" del /f /q "%OLD_ZIP%"
 
 echo.
 echo ============================================================
 echo [PureLive] Release 构建完成。
-echo [PureLive] 固定运行目录：%OUTPUT_DIR%
-echo [PureLive] 固定压缩包：%ZIP_PATH%
-echo [PureLive] 下次运行本脚本会直接覆盖这两个旧输出。
+echo [PureLive] 已生成固定文件夹：
+echo %OUTPUT_DIR%
+echo.
+echo [PureLive] 下次运行会直接覆盖这个文件夹，不会创建新版本目录。
 echo ============================================================
 echo.
 echo 可直接运行：%OUTPUT_DIR%\pure_live.exe
@@ -118,12 +116,5 @@ if exist "%TEMP_DIR%" rmdir /s /q "%TEMP_DIR%"
 echo.
 echo [PureLive] 无法覆盖旧的 PureLive-Local。
 echo 请确认旧版 pure_live.exe 已完全退出，再重新运行脚本。
-pause
-exit /b 1
-
-:zip_failed
-echo.
-echo [PureLive] PureLive-Local 已成功更新，但 ZIP 压缩失败。
-echo 你仍然可以直接运行：%OUTPUT_DIR%\pure_live.exe
 pause
 exit /b 1
