@@ -1,0 +1,22 @@
+# Local/offline overrides for Git-sourced dependencies.
+# Keep the non-Git overrides from pubspec.yaml here as well because
+# pubspec_overrides.yaml takes precedence over that section.
+dependency_overrides:
+  wakelock_plus: ^1.4.0
+  app_links: 7.0.0
+  meta: 1.18.0
+  hooks: ^2.0.0
+  media_kit:
+    path: vendor/media-kit/media_kit
+  media_kit_video:
+    path: vendor/media-kit/media_kit_video
+  media_kit_libs_video:
+    path: vendor/media-kit/libs/universal/media_kit_libs_video
+  media_kit_libs_windows_video:
+    path: vendor/media-kit/libs/windows/media_kit_libs_windows_video
+  flv_lzc:
+    path: vendor/flv_lzc
+  screen_retriever:
+    path: vendor/screen_retriever
+  dart_quickjs:
+    path: vendor/dart_quickjs
