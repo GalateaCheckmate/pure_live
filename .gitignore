@@ -33,6 +33,11 @@ migrate_working_dir/
 .pub/
 /build/
 
+# Local Windows release output
+/PureLive-Local/
+/PureLive-Local.__new/
+/PureLive-Windows.zip
+
 # Symbolication related
 app.*.symbols
 
