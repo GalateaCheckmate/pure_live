@@ -1,0 +1,167 @@
+name: Vendor Git dependencies once
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/vendor-git-dependencies.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    name: Vendor Git dependencies for offline Windows development
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Fetch pinned upstream sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf vendor .vendor-src
+          mkdir -p .vendor-src
+          mkdir -p vendor/media-kit/libs/universal
+          mkdir -p vendor/media-kit/libs/windows
+          mkdir -p vendor/flv_lzc vendor/screen_retriever vendor/dart_quickjs
+
+          clone_at() {
+            local repo="$1"
+            local sha="$2"
+            local dest="$3"
+            git clone --quiet --filter=blob:none --no-checkout "$repo" "$dest"
+            git -C "$dest" checkout --quiet --detach "$sha"
+          }
+
+          clone_at "https://github.com/Predidit/media-kit.git" \
+            "6d744e4ad8af23d29942a7061d8de101972a3707" \
+            ".vendor-src/media-kit"
+          clone_at "https://github.com/liuchuancong/flv_lzc.git" \
+            "030d611dd4ebff40962a13209bb56230853f4f9f" \
+            ".vendor-src/flv_lzc"
+          clone_at "https://github.com/liuchuancong/screen_retriever.git" \
+            "b246b3963738d6cc159c921764c194c73dbdf2ad" \
+            ".vendor-src/screen_retriever"
+          clone_at "https://github.com/liuchuancong/dart_quickjs.git" \
+            "0596dfcee794a6af7d6dd0bc6819ba80e0ed655d" \
+            ".vendor-src/dart_quickjs"
+
+          cp -a .vendor-src/media-kit/media_kit vendor/media-kit/
+          cp -a .vendor-src/media-kit/media_kit_video vendor/media-kit/
+          cp -a .vendor-src/media-kit/libs/universal/media_kit_libs_video \
+            vendor/media-kit/libs/universal/
+          cp -a .vendor-src/media-kit/libs/windows/media_kit_libs_windows_video \
+            vendor/media-kit/libs/windows/
+
+          rsync -a --exclude='.git' .vendor-src/flv_lzc/ vendor/flv_lzc/
+          rsync -a .vendor-src/screen_retriever/packages/screen_retriever/ \
+            vendor/screen_retriever/
+          rsync -a --exclude='.git' .vendor-src/dart_quickjs/ vendor/dart_quickjs/
+
+      - name: Make media-kit Windows libraries self-contained
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          universal = Path('vendor/media-kit/libs/universal/media_kit_libs_video/pubspec.yaml')
+          text = universal.read_text(encoding='utf-8')
+          marker = 'dependencies:\n'
+          if marker not in text:
+              raise SystemExit('media_kit_libs_video pubspec dependencies block not found')
+          head = text.split(marker, 1)[0]
+          universal.write_text(
+              head
+              + 'dependencies:\n'
+              + '  media_kit_libs_windows_video:\n'
+              + '    path: ../../windows/media_kit_libs_windows_video\n',
+              encoding='utf-8',
+          )
+
+          cmake = Path('vendor/media-kit/libs/windows/media_kit_libs_windows_video/windows/CMakeLists.txt')
+          text = cmake.read_text(encoding='utf-8')
+          old = 'set(LIBMPV_ARCHIVE "${CMAKE_BINARY_DIR}/${LIBMPV}")'
+          new = 'set(LIBMPV_ARCHIVE "${CMAKE_CURRENT_SOURCE_DIR}/${LIBMPV}")'
+          if old not in text:
+              raise SystemExit('media-kit LIBMPV_ARCHIVE definition not found')
+          cmake.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+          archive="vendor/media-kit/libs/windows/media_kit_libs_windows_video/windows/mpv-dev-x86_64-20260623-git-ad59ff1.7z"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --output "$archive" \
+            "https://github.com/Predidit/libmpv-win32-video-cmake/releases/download/20260623/mpv-dev-x86_64-20260623-git-ad59ff1.7z"
+          echo "159d7379898e2e2490ab3e0dca233daa5b7389fcd32d4cb8c420399f44284399  $archive" | sha256sum --check
+
+      - name: Configure local dependency overrides
+        shell: bash
+        run: |
+          cat > pubspec_overrides.yaml <<'EOF'
+          # Local/offline overrides for Git-sourced dependencies.
+          # Keep the non-Git overrides from pubspec.yaml here as well because
+          # pubspec_overrides.yaml takes precedence over that section.
+          dependency_overrides:
+            wakelock_plus: ^1.4.0
+            app_links: 7.0.0
+            meta: 1.18.0
+            hooks: ^2.0.0
+            media_kit:
+              path: vendor/media-kit/media_kit
+            media_kit_video:
+              path: vendor/media-kit/media_kit_video
+            media_kit_libs_video:
+              path: vendor/media-kit/libs/universal/media_kit_libs_video
+            media_kit_libs_windows_video:
+              path: vendor/media-kit/libs/windows/media_kit_libs_windows_video
+            flv_lzc:
+              path: vendor/flv_lzc
+            screen_retriever:
+              path: vendor/screen_retriever
+            dart_quickjs:
+              path: vendor/dart_quickjs
+          EOF
+
+          cat > vendor/README.md <<'EOF'
+          # Vendored Git dependencies
+
+          These sources are committed so local Windows development does not need direct GitHub access during `flutter pub get` or the normal x64 Windows media-kit build.
+
+          Pinned upstream revisions:
+
+          - `Predidit/media-kit`: `6d744e4ad8af23d29942a7061d8de101972a3707`
+          - `liuchuancong/flv_lzc`: `030d611dd4ebff40962a13209bb56230853f4f9f`
+          - `liuchuancong/screen_retriever`: `b246b3963738d6cc159c921764c194c73dbdf2ad`
+          - `liuchuancong/dart_quickjs`: `0596dfcee794a6af7d6dd0bc6819ba80e0ed655d`
+          - x64 libmpv archive: `mpv-dev-x86_64-20260623-git-ad59ff1.7z`, SHA-256 `159d7379898e2e2490ab3e0dca233daa5b7389fcd32d4cb8c420399f44284399`
+
+          `media_kit_libs_video` is intentionally narrowed to the Windows implementation because this PureLive baseline is Windows-only. The vendored media-kit CMake file is also pointed at the committed x64 libmpv archive instead of downloading it from GitHub at build time.
+          EOF
+
+      - name: Commit vendored dependencies to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .vendor-src
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f vendor pubspec_overrides.yaml
+          if git diff --cached --quiet; then
+            echo "No vendoring changes to commit."
+            exit 0
+          fi
+
+          git commit -m "build: vendor Git dependencies for offline Windows development [skip ci]"
+          git push origin HEAD:master
